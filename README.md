@@ -2,7 +2,7 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.3.2` (CI gates **ruff** + **mypy** on `src/governed_stack`; P1 contracts retained).
+**Package version:** `0.4.0` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social adapters.
 
@@ -100,6 +100,25 @@ pip install -e ".[dev]"            # optional; PYTHONPATH also works
 
 **Never call social publish/create_post until `GovernedPost.check` returns ALLOW.** Prefer `require_allow` / `HavenUnified().post`. Agent rules: `src/governed_stack/AGENT_SOCIAL.md`.
 
+
+## Customer ops
+
+First **customer-operable** slice on the live gate: stdlib HTTP sidecar (check-only), runbook, and example env.
+
+- Runbook: [`docs/CUSTOMER_OPS.md`](docs/CUSTOMER_OPS.md)
+- Example env: [`config/customer.env.example`](config/customer.env.example)
+- Sidecar: `src/governed_stack/sidecar.py` via `scripts/run_sidecar.py`
+- Optional thin `Dockerfile` (tests do not need Docker)
+
+```bash
+.venv/bin/python scripts/key_ops.py generate --path artifacts/customer/signing_key.pem
+# optional: export $(grep -v '^#' config/customer.env.example | xargs)  # edit first
+.venv/bin/python scripts/run_sidecar.py
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8080/ready
+```
+
+`POST /v1/check` decides ALLOW/REVIEW/BLOCK for mail/calendar/social/raw — **never sends**. If `GOVERNANCE_API_KEY` is set, `/v1/*` requires `X-API-Key` (health/ready/metrics stay open). Operator loop: `scripts/review_ops.py`, `scripts/audit_verify.py`, `scripts/metrics_report.py`.
 
 ## Keys (signing)
 

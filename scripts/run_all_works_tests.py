@@ -46,6 +46,7 @@ def main() -> int:
         "tests.test_key_providers",
         "tests.test_observability",
         "tests.test_contracts",
+        "tests.test_sidecar",
     ]
     cmd = [sys.executable, "-m", "unittest", *modules, "-v"]
     print("Running:", " ".join(modules))
