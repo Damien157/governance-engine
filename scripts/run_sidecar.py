@@ -4,7 +4,10 @@
 Env (see config/customer.env.example / docs/CUSTOMER_OPS.md):
   GOVERNANCE_DB_PATH, GOVERNANCE_SIGNING_KEY_PATH,
   GOVERNANCE_HOST (default 127.0.0.1), GOVERNANCE_PORT (default 8080),
-  GOVERNANCE_API_KEY (optional; if set, required on /v1/*),
+  GOVERNANCE_API_KEY (optional single-tenant; if set, required on /v1/*),
+  GOVERNANCE_API_KEYS / GOVERNANCE_TENANTS_JSON (multi-tenant lite),
+  GOVERNANCE_MASTER_API_KEY (optional + X-Tenant-Id),
+  GOVERNANCE_RATE_LIMIT_PER_MIN (default 60; /v1/* only),
   GOVERNANCE_REQUIRE_PERSISTED_KEY=1 (production posture).
 
 Never sends mail/calendar/social.

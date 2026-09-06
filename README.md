@@ -2,7 +2,7 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.4.0` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
+**Package version:** `0.4.1` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social adapters.
 
@@ -103,7 +103,7 @@ pip install -e ".[dev]"            # optional; PYTHONPATH also works
 
 ## Customer ops
 
-First **customer-operable** slice on the live gate: stdlib HTTP sidecar (check-only), runbook, and example env.
+Customer-operable live gate: stdlib HTTP sidecar (check-only), multi-tenant lite (API-key → isolated audit DB) + per-tenant rate limits, runbook, and example env.
 
 - Runbook: [`docs/CUSTOMER_OPS.md`](docs/CUSTOMER_OPS.md)
 - Example env: [`config/customer.env.example`](config/customer.env.example)
@@ -118,7 +118,7 @@ curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```
 
-`POST /v1/check` decides ALLOW/REVIEW/BLOCK for mail/calendar/social/raw — **never sends**. If `GOVERNANCE_API_KEY` is set, `/v1/*` requires `X-API-Key` (health/ready/metrics stay open). Operator loop: `scripts/review_ops.py`, `scripts/audit_verify.py`, `scripts/metrics_report.py`.
+`POST /v1/check` decides ALLOW/REVIEW/BLOCK for mail/calendar/social/raw — **never sends**. Auth: single `GOVERNANCE_API_KEY` or multi-tenant `GOVERNANCE_API_KEYS` / `GOVERNANCE_TENANTS_JSON` (`X-API-Key` → tenant). Rate limit: `GOVERNANCE_RATE_LIMIT_PER_MIN` (default 60) on `/v1/*`. Operator loop: `scripts/review_ops.py`, `scripts/audit_verify.py`, `scripts/metrics_report.py`.
 
 ## Keys (signing)
 

@@ -29,11 +29,26 @@ for p in reversed(_PATHS):
 from certified_governance_unified import CryptoEngine  # noqa: E402
 from governed_stack import __version__  # noqa: E402
 from governed_stack.sidecar import (  # noqa: E402
+    RateLimiter,
     SidecarService,
+    TenantRegistry,
+    TenantSpec,
     create_server,
     load_sidecar_config,
 )
 from governed_stack.stack import GovernedStack  # noqa: E402
+
+_MT_ENV = (
+    "GOVERNANCE_TENANTS_JSON",
+    "GOVERNANCE_API_KEYS",
+    "GOVERNANCE_MASTER_API_KEY",
+    "GOVERNANCE_RATE_LIMIT_PER_MIN",
+    "GOVERNANCE_API_KEY",
+    "GOVERNANCE_DB_PATH",
+    "GOVERNANCE_SIGNING_KEY_PATH",
+    "GOVERNANCE_HOST",
+    "GOVERNANCE_PORT",
+)
 
 
 def _http_json(
@@ -67,6 +82,16 @@ def _http_json(
         return exc.code, payload
 
 
+def _close_stack(stack: GovernedStack) -> None:
+    eng = getattr(stack, "engine", None)
+    storage = getattr(eng, "storage", None) if eng else None
+    if storage is not None and hasattr(storage, "close"):
+        try:
+            storage.close()
+        except Exception:
+            pass
+
+
 class TestSidecarHTTP(unittest.TestCase):
     """Spin a local ThreadingHTTPServer; hit with urllib."""
 
@@ -96,6 +121,7 @@ class TestSidecarHTTP(unittest.TestCase):
                 "port": 0,
                 "api_key": None,
                 "log_level": 50,
+                "rate_limit_per_min": 0,  # unlimited for suite volume
             },
             stack=stack,
         )
@@ -111,13 +137,7 @@ class TestSidecarHTTP(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        eng = getattr(cls.service.stack, "engine", None)
-        storage = getattr(eng, "storage", None) if eng else None
-        if storage is not None and hasattr(storage, "close"):
-            try:
-                storage.close()
-            except Exception:
-                pass
+        _close_stack(cls.service.stack)
         cls._tmpdir.cleanup()
         print(f"\n  [TestSidecarHTTP] class total: {time.time() - cls._t0:.2f}s")
 
@@ -200,6 +220,7 @@ class TestSidecarApiKey(unittest.TestCase):
                 "signing_key_path": cls.key_path,
                 "api_key": cls.api_key,
                 "log_level": 50,
+                "rate_limit_per_min": 0,
             },
             stack=stack,
         )
@@ -214,13 +235,7 @@ class TestSidecarApiKey(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        eng = getattr(cls.service.stack, "engine", None)
-        storage = getattr(eng, "storage", None) if eng else None
-        if storage is not None and hasattr(storage, "close"):
-            try:
-                storage.close()
-            except Exception:
-                pass
+        _close_stack(cls.service.stack)
         cls._tmpdir.cleanup()
 
     def test_health_open_without_key(self):
@@ -285,6 +300,7 @@ class TestSidecarReadyFail(unittest.TestCase):
                     "db_path": db,
                     "signing_key_path": missing_key,
                     "api_key": None,
+                    "rate_limit_per_min": 0,
                 },
                 stack=stack,
             )
@@ -304,33 +320,298 @@ class TestSidecarReadyFail(unittest.TestCase):
             finally:
                 httpd.shutdown()
                 httpd.server_close()
-                storage = getattr(stack.engine, "storage", None)
-                if storage is not None and hasattr(storage, "close"):
-                    try:
-                        storage.close()
-                    except Exception:
-                        pass
+                _close_stack(stack)
 
 
 class TestLoadConfig(unittest.TestCase):
     def test_defaults(self):
-        # Clear customer-ish env for isolation.
-        old = {k: os.environ.pop(k, None) for k in (
-            "GOVERNANCE_DB_PATH",
-            "GOVERNANCE_SIGNING_KEY_PATH",
-            "GOVERNANCE_HOST",
-            "GOVERNANCE_PORT",
-            "GOVERNANCE_API_KEY",
-        )}
+        old = {k: os.environ.pop(k, None) for k in _MT_ENV}
         try:
             cfg = load_sidecar_config()
             self.assertEqual(cfg["host"], "127.0.0.1")
             self.assertEqual(cfg["port"], 8080)
             self.assertIn("audit.db", cfg["db_path"])
+            self.assertEqual(cfg["rate_limit_per_min"], 60)
         finally:
             for k, v in old.items():
                 if v is not None:
                     os.environ[k] = v
+
+
+class TestRateLimiterUnit(unittest.TestCase):
+    def test_sliding_window_trips(self):
+        lim = RateLimiter(limit=3, window_s=60.0)
+        self.assertTrue(lim.allow("t1"))
+        self.assertTrue(lim.allow("t1"))
+        self.assertTrue(lim.allow("t1"))
+        self.assertFalse(lim.allow("t1"))
+        self.assertTrue(lim.allow("t2"))  # other bucket
+
+    def test_disabled_when_zero(self):
+        lim = RateLimiter(limit=0)
+        for _ in range(20):
+            self.assertTrue(lim.allow("x"))
+
+
+class TestSidecarMultiTenant(unittest.TestCase):
+    """Two API keys → isolated decisions/dbs; shared signing key."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        td = Path(cls._tmpdir.name)
+        cls.key_path = str(td / "signing_key.pem")
+        crypto = CryptoEngine(private_key_path=cls.key_path)
+        assert Path(cls.key_path).is_file()
+
+        specs = {
+            "alpha": TenantSpec(
+                tenant_id="alpha",
+                api_key="key-alpha-aaa",
+                db_path=str(td / "tenants" / "alpha" / "audit.db"),
+                signing_key_path=cls.key_path,
+            ),
+            "beta": TenantSpec(
+                tenant_id="beta",
+                api_key="key-beta-bbb",
+                db_path=str(td / "tenants" / "beta" / "audit.db"),
+                signing_key_path=cls.key_path,
+            ),
+        }
+
+        def _factory(spec: TenantSpec) -> SidecarService:
+            # Share crypto object so both tenants verify the same JWTs if needed;
+            # each still gets its own GovernedStack / audit DB.
+            stack = GovernedStack(
+                config={
+                    "db_path": spec.db_path,
+                    "signing_key_path": spec.signing_key_path,
+                    "log_level": 50,
+                },
+                crypto=crypto,
+            )
+            return SidecarService(
+                config={
+                    "db_path": spec.db_path,
+                    "signing_key_path": spec.signing_key_path,
+                    "api_key": spec.api_key,
+                    "log_level": 50,
+                    "rate_limit_per_min": 0,
+                    "_skip_registry": True,
+                },
+                stack=stack,
+            )
+
+        registry = TenantRegistry(
+            specs,
+            rate_limit_per_min=0,
+            base_config={"log_level": 50, "signing_key_path": cls.key_path},
+            service_factory=_factory,
+        )
+        cls.registry = registry
+        cls.service = SidecarService(
+            config={
+                "db_path": specs["alpha"].db_path,
+                "signing_key_path": cls.key_path,
+                "log_level": 50,
+                "rate_limit_per_min": 0,
+            },
+            registry=registry,
+        )
+        cls.httpd, _ = create_server(cls.service, host="127.0.0.1", port=0)
+        cls.port = cls.httpd.server_address[1]
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        cls._thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls._thread.start()
+        time.sleep(0.05)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        for tid in cls.registry.tenant_ids():
+            _close_stack(cls.registry.get_service(tid).stack)
+        cls._tmpdir.cleanup()
+
+    def test_ready_checks_tenants(self):
+        code, body = _http_json(f"{self.base}/ready")
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("status"), "ready")
+
+    def test_isolated_dbs_and_tenant_id(self):
+        alpha = self.registry.get_service("alpha")
+        beta = self.registry.get_service("beta")
+        token_a = alpha.issue_token("alice", "operator")
+        token_b = beta.issue_token("bob", "operator")
+
+        code_a, body_a = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={
+                "channel": "mail",
+                "token": token_a,
+                "subject": "Alpha lunch",
+                "body": "Alpha body unique",
+            },
+            headers={"X-API-Key": "key-alpha-aaa"},
+        )
+        code_b, body_b = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={
+                "channel": "mail",
+                "token": token_b,
+                "subject": "Beta lunch",
+                "body": "Beta body unique",
+            },
+            headers={"X-API-Key": "key-beta-bbb"},
+        )
+        self.assertEqual(code_a, 200)
+        self.assertEqual(code_b, 200)
+        assert isinstance(body_a, dict) and isinstance(body_b, dict)
+        self.assertEqual(body_a.get("tenant_id"), "alpha")
+        self.assertEqual(body_b.get("tenant_id"), "beta")
+        self.assertEqual(body_a.get("decision"), "ALLOW")
+        self.assertEqual(body_b.get("decision"), "ALLOW")
+        self.assertNotEqual(body_a.get("entry_id"), body_b.get("entry_id"))
+
+        # Distinct SQLite files on disk.
+        self.assertTrue(Path(self.registry.specs["alpha"].db_path).is_file())
+        self.assertTrue(Path(self.registry.specs["beta"].db_path).is_file())
+        self.assertNotEqual(
+            self.registry.specs["alpha"].db_path,
+            self.registry.specs["beta"].db_path,
+        )
+
+    def test_wrong_key_401(self):
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={"channel": "mail", "token": "x", "subject": "s", "body": "b"},
+            headers={"X-API-Key": "nope"},
+        )
+        self.assertEqual(code, 401)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("error"), "unauthorized")
+
+
+class TestSidecarRateLimitHTTP(unittest.TestCase):
+    """Rate limit trips 429 on /v1/*."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        td = Path(cls._tmpdir.name)
+        cls.db_path = str(td / "audit.db")
+        cls.key_path = str(td / "signing_key.pem")
+        crypto = CryptoEngine(private_key_path=cls.key_path)
+        stack = GovernedStack(
+            config={
+                "db_path": cls.db_path,
+                "signing_key_path": cls.key_path,
+                "log_level": 50,
+            },
+            crypto=crypto,
+        )
+        cls.api_key = "rate-limit-key"
+        cls.service = SidecarService(
+            config={
+                "db_path": cls.db_path,
+                "signing_key_path": cls.key_path,
+                "api_key": cls.api_key,
+                "log_level": 50,
+                "rate_limit_per_min": 3,
+            },
+            stack=stack,
+        )
+        cls.httpd, _ = create_server(cls.service, host="127.0.0.1", port=0)
+        cls.port = cls.httpd.server_address[1]
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        cls._thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls._thread.start()
+        time.sleep(0.05)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        _close_stack(cls.service.stack)
+        cls._tmpdir.cleanup()
+
+    def test_rate_limit_429(self):
+        token = self.service.issue_token("tester", "operator")
+        payload = {
+            "channel": "mail",
+            "token": token,
+            "subject": "Lunch",
+            "body": "Are you free tomorrow?",
+        }
+        hdrs = {"X-API-Key": self.api_key}
+        codes = []
+        for _ in range(4):
+            code, body = _http_json(
+                f"{self.base}/v1/check",
+                method="POST",
+                body=payload,
+                headers=hdrs,
+            )
+            codes.append(code)
+            if code == 429:
+                assert isinstance(body, dict)
+                self.assertEqual(body.get("error"), "rate_limited")
+                self.assertEqual(body.get("error_code"), "GOV_RATE_LIMIT")
+        self.assertIn(429, codes)
+        self.assertEqual(codes.count(200), 3)
+        # Health stays open under rate limit pressure.
+        hcode, _ = _http_json(f"{self.base}/health")
+        self.assertEqual(hcode, 200)
+
+
+class TestTenantRegistryFromEnv(unittest.TestCase):
+    def test_api_keys_csv(self):
+        old = {k: os.environ.pop(k, None) for k in _MT_ENV}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                key = str(Path(td) / "signing_key.pem")
+                CryptoEngine(private_key_path=key)
+                os.environ["GOVERNANCE_API_KEYS"] = "t1:secret1,t2:secret2"
+                os.environ["GOVERNANCE_SIGNING_KEY_PATH"] = key
+                os.environ["GOVERNANCE_RATE_LIMIT_PER_MIN"] = "0"
+                # Point tenants root via JSON instead for predictable paths under td —
+                # CSV uses repo artifacts/tenants; use TENANTS_JSON for isolation.
+                os.environ.pop("GOVERNANCE_API_KEYS", None)
+                os.environ["GOVERNANCE_TENANTS_JSON"] = json.dumps(
+                    {
+                        "t1": {
+                            "api_key": "secret1",
+                            "db_path": str(Path(td) / "t1" / "audit.db"),
+                            "signing_key_path": key,
+                        },
+                        "t2": {
+                            "api_key": "secret2",
+                            "db_path": str(Path(td) / "t2" / "audit.db"),
+                            "signing_key_path": key,
+                        },
+                    }
+                )
+                reg = TenantRegistry.from_env(
+                    {"signing_key_path": key, "rate_limit_per_min": 0, "log_level": 50}
+                )
+                self.assertIsNotNone(reg)
+                assert reg is not None
+                tid, svc, err = reg.resolve("secret1")
+                self.assertIsNone(err)
+                self.assertEqual(tid, "t1")
+                self.assertIsNotNone(svc)
+                for t in reg.tenant_ids():
+                    _close_stack(reg.get_service(t).stack)
+        finally:
+            for k, v in old.items():
+                if v is not None:
+                    os.environ[k] = v
+                else:
+                    os.environ.pop(k, None)
 
 
 if __name__ == "__main__":

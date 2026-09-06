@@ -5,7 +5,7 @@ GovernedDecisionEngine is the live decide adapter.
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 
 from .calendar import CalendarBlocked, GovernedCalendar
@@ -42,7 +42,15 @@ from .key_providers import (
 from .mail import GovernedMail, SendBlocked, intent_for_scan
 from .observability import DecisionMetrics, structured_log
 from .runtime_bridge import GovernedDecisionEngine
-from .sidecar import SidecarService, create_server, load_sidecar_config, serve_forever
+from .sidecar import (
+    RateLimiter,
+    SidecarService,
+    TenantRegistry,
+    TenantSpec,
+    create_server,
+    load_sidecar_config,
+    serve_forever,
+)
 from .social import GovernedOutboundText, GovernedPost, PostBlocked
 from .social import intent_for_scan as social_intent_for_scan
 from .stack import GovernedStack, ensure_import_paths
@@ -95,6 +103,9 @@ __all__ = [
     "validate_mail_scan",
     "validate_calendar_scan",
     "validate_social_scan",
+    "RateLimiter",
+    "TenantRegistry",
+    "TenantSpec",
     "SidecarService",
     "create_server",
     "load_sidecar_config",
