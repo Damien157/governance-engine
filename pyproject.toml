@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "governance-engine"
+version = "0.3.2"
+description = "governed request stack (mail/calendar/social gates)"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "cvxopt>=1.3.2",
+  "matplotlib>=3.7",
+  "PyJWT",
+  "cryptography",
+  "psutil",
+  "PyYAML",
+  "osqp",
+  "scipy",
+  "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Put "." before hais so repo tests/ wins over any hais test package.
+pythonpath = [".", "src", "hais", "imprint/src", "haven2/src"]
+
+# Sketch packages live at repo root; importable via ensure_import_paths / PYTHONPATH="." .
+# Optional install mapping (does not remove src packages):
+#   pip install -e .  still finds governance_engine + governed_stack under src/
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+# mypy gates src/governed_stack only (not the certified_governance_unified monolith).
+# python_version=3.12: numpy stubs use `type` statements; CI runs 3.12/3.13.
+# requires-python remains >=3.10 for runtime.
+[tool.mypy]
+python_version = "3.12"
+files = ["src/governed_stack"]
+mypy_path = ["src", "hais", "imprint/src", "haven2/src", "."]
+warn_return_any = false
+ignore_missing_imports = true
+follow_imports = "silent"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+  "certified_governance_unified",
+  "certified_governance",
+  "haven2",
+  "haven2.*",
+  "imprint",
+  "imprint.*",
+  "hais_unified_kernel",
+  "governance_engine",
+  "governance_engine.*",
+]
+ignore_errors = true

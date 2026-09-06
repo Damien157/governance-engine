@@ -1,0 +1,5 @@
+PyJWT
+cryptography
+psutil
+PyYAML
+pytest
