@@ -4,6 +4,10 @@ Stdlib ``http.server`` only — no FastAPI / heavy web deps.
 Never sends mail/calendar/social; ``POST /v1/check`` runs govern/adapters
 in check mode only. Sketches stay off this path.
 
+There is intentionally **no** ``POST /v1/execute``: remote arbitrary side
+effects are unsafe. Mutations go through in-process ``GovernedActionBus``
+(library-side only); this sidecar remains check-only.
+
 0.4.1: multi-tenant lite (API-key → tenant + isolated audit DB) and
 in-memory rate limits per tenant on ``/v1/*``.
 """
@@ -688,6 +692,19 @@ def make_handler(service: SidecarService) -> type:
                     return
             else:
                 tenant_svc, tenant_id = service, None
+            if path == "/v1/execute":
+                # Library GovernedActionBus only — refuse remote side effects.
+                self._send(
+                    405,
+                    {
+                        "error": "execute_not_supported",
+                        "reason": (
+                            "sidecar is check-only; mutations must use "
+                            "in-process GovernedActionBus.execute"
+                        ),
+                    },
+                )
+                return
             if path == "/v1/check":
                 body, err = self._read_json()
                 if err:

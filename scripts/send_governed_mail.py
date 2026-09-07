@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Stub outbound send path: gate with GovernedMail.require_allow, then print
-"would send". Does NOT call Gmail or any network mail API.
+Stub outbound send path via GovernedActionBus.execute.
 
-Agents must call GovernedMail.check / require_allow first; only on ALLOW
-may they invoke Gmail MCP send_message / reply / forward / create_draft.
+Gates with require_allow inside the bus, then runs a print/mock side_effect
+("would send"). Does NOT call Gmail or any network mail API.
+
+Agents must not invoke Gmail MCP send_message / reply / forward / create_draft
+except from a side_effect registered through GovernedActionBus (ALLOW only).
 """
 
 from __future__ import annotations
@@ -25,14 +27,14 @@ for p in (
     if s not in sys.path:
         sys.path.insert(0, s)
 
-from governed_stack import GovernedMail, SendBlocked  # noqa: E402
+from governed_stack import ActionDenied, GovernedActionBus, SendBlocked  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Gate outbound email then print 'would send' (no Gmail API). "
-            "Agents must check first; only ALLOW may proceed to real send."
+            "Gate outbound email via GovernedActionBus then print 'would send' "
+            "(no Gmail API). Side effect runs only after ALLOW."
         )
     )
     parser.add_argument(
@@ -58,28 +60,38 @@ def main(argv: list[str] | None = None) -> int:
     else:
         body = args.body or ""
 
-    mail = GovernedMail()
+    bus = GovernedActionBus()
+
+    def _mock_send(result: dict) -> dict:
+        print("would send")
+        return {"mock": True, "to": result.get("to"), "subject": result.get("subject")}
+
     try:
-        result = mail.require_allow_sync(
+        result = bus.execute_sync(
+            "mail",
             to=args.to,
             subject=args.subject,
             body=body,
             user=args.user,
             role=args.role,
+            side_effect=_mock_send,
         )
-    except SendBlocked as exc:
+    except (SendBlocked, ActionDenied) as exc:
         print(json.dumps(exc.result, indent=2, default=str))
-        print("refused: not ALLOW — do not call Gmail send/draft", file=sys.stderr)
+        print(
+            "refused: not ALLOW — side_effect not called; do not call Gmail",
+            file=sys.stderr,
+        )
         return 1
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2), file=sys.stderr)
         return 2
 
     print(json.dumps(result, indent=2, default=str))
-    print("would send")
     print(
         "NOTE: this stub does not call Gmail. Agents must only call "
-        "Gmail send_message/reply/forward/create_draft after ALLOW.",
+        "Gmail send_message/reply/forward/create_draft from a bus side_effect "
+        "after ALLOW.",
         file=sys.stderr,
     )
     return 0

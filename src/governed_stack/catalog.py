@@ -1,7 +1,7 @@
 """
 Structured inventory of governed-stack modules by tier.
 
-live  — front-door decision path (GovernedStack + mail/calendar/social + runtime_bridge)
+live  — front-door decision path (GovernedStack + action bus + mail/calendar/social + runtime_bridge)
 core  — packages composed by GovernedStack on the live path
 sketch — importable experiments; never consulted for ALLOW / BLOCK / REVIEW
 """
@@ -19,6 +19,12 @@ TIERS: Dict[str, List[Dict[str, str]]] = {
             "symbol": "GovernedStack",
             "path": "src/governed_stack/stack.py",
             "role": "Front door: ops → HAIS → Haven2 → optional QP/3DM",
+        },
+        {
+            "module": "governed_stack.action_bus",
+            "symbol": "GovernedActionBus",
+            "path": "src/governed_stack/action_bus.py",
+            "role": "Mutation facade: require_allow before side_effect (no bypass)",
         },
         {
             "module": "governed_stack.mail",

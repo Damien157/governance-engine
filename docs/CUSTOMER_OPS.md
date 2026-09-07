@@ -1,11 +1,12 @@
 # Customer operations — governed request gate
 
 Honest prototype → **operable service shape**. Customer-ops on the live gate
-(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**; audit chain race fix in **0.4.3**; bug→fix pass in **0.4.4**). Not a full SaaS product yet.
+(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**; audit chain race fix in **0.4.3**; bug→fix pass in **0.4.4**; **governed action bus** in **0.5.0**). Not a full SaaS product yet.
 
 ## What this is
 
 - A **non-fiction governed request gate**: decide ALLOW / REVIEW / BLOCK before outbound mail, calendar writes, or social posts.
+- An in-process **`GovernedActionBus`**: mutations must pass `require_allow` before any `side_effect` (library-only; no remote execute).
 - A thin **HTTP sidecar** (`governed_stack.sidecar`) that exposes health, readiness, Prometheus metrics, and **check-only** decisions.
 - **Multi-tenant lite**: map `X-API-Key` → tenant id + isolated audit DB (optional shared/per-tenant signing key).
 - **Rate limiting**: in-memory sliding window per tenant (default 60 req/min on `/v1/*`).
@@ -15,6 +16,7 @@ Honest prototype → **operable service shape**. Customer-ops on the live gate
 ## What this is not
 
 - Not a mail/calendar/social **sender** — the sidecar and adapters never send, create events, or publish.
+- Not a remote execute API — `POST /v1/execute` is refused; use `GovernedActionBus` in-process.
 - Not cloud KMS / HSM — signing uses local PEM or a **local** KMS-shaped env provider (`EnvKMSKeyProvider`).
 - Not a full multi-tenant SaaS product (billing, SSO, quotas UI) — lite isolation only.
 - Not an SLA, not a formal certificate authority product.
@@ -45,7 +47,7 @@ set -a && source /tmp/customer.env && set +a
 
 ```bash
 curl -s http://127.0.0.1:8080/health
-# {"status":"ok","version":"0.4.4"}
+# {"status":"ok","version":"0.5.0"}
 
 curl -s http://127.0.0.1:8080/ready
 # 200 {"status":"ready","reasons":[]}  — or 503 with reasons
@@ -83,12 +85,12 @@ Optional: `POST /v1/review/list` lists pending REVIEW rows (same engine as CLI).
 ### Optional Docker
 
 ```bash
-docker build -t governed-sidecar:0.4.4 .
+docker build -t governed-sidecar:0.5.0 .
 docker run --rm -p 8080:8080 \
   -e GOVERNANCE_REQUIRE_PERSISTED_KEY=1 \
   -e GOVERNANCE_API_KEY=... \
   -v "$PWD/artifacts/customer:/app/artifacts/customer" \
-  governed-sidecar:0.4.4
+  governed-sidecar:0.5.0
 ```
 
 Tests do **not** require Docker.
@@ -223,4 +225,4 @@ Concurrent audit soak (CI): `tests/test_audit_soak.py` (manual: `scripts/audit_s
 
 ## Version
 
-Customer-ops milestone: package **0.4.4** (`governed_stack.__version__`) — bug→fix pass (latch BLOCK, scan routing reject, clamped Re default, PositionCBF HOCBF). See [`BUGFIXES.md`](BUGFIXES.md).
+Package **0.5.0** (`governed_stack.__version__`) — governed action bus (no bypass). Prior: 0.4.4 bug→fix pass. Roadmap: [`FULL_GOVERNANCE_ROADMAP.md`](FULL_GOVERNANCE_ROADMAP.md).

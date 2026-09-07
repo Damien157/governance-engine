@@ -2,12 +2,19 @@
 
 Front door: HavenUnified (alias GovernedUnified) → GovernedStack.govern;
 GovernedDecisionEngine is the live decide adapter.
+GovernedActionBus: mutation facade — require_allow before any side_effect (no bypass).
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.4.4"
+__version__ = "0.5.0"
 
 
+from .action_bus import (
+    CHANNELS,
+    PUBLIC_EXECUTE_HELPERS,
+    ActionDenied,
+    GovernedActionBus,
+)
 from .calendar import CalendarBlocked, GovernedCalendar
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .catalog import TIERS, catalog_snapshot, describe, import_check, live_ok
@@ -58,6 +65,7 @@ from .unified import GovernedUnified, HavenUnified
 
 __all__ = [
     "GovernedStack",
+    "GovernedActionBus",
     "GovernedMail",
     "GovernedCalendar",
     "GovernedPost",
@@ -66,8 +74,11 @@ __all__ = [
     "GovernedUnified",
     "GovernedDecisionEngine",
     "SendBlocked",
+    "ActionDenied",
     "CalendarBlocked",
     "PostBlocked",
+    "CHANNELS",
+    "PUBLIC_EXECUTE_HELPERS",
     "ensure_import_paths",
     "intent_for_scan",
     "calendar_intent_for_scan",

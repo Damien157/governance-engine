@@ -2,9 +2,11 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.4.4` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
+**Package version:** `0.5.0` (governed action bus — no bypass; CI gates **ruff** + **mypy** on `src/governed_stack`).
 
 **Bug→fix log:** [`docs/BUGFIXES.md`](docs/BUGFIXES.md) (0.4.4 latch BLOCK, scan routing reject, clamped Re default, PositionCBF HOCBF; plus 0.4.3 audit chain race).
+
+**Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (action bus → connectors → CI → tool/agent → tenancy/KMS).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social adapters.
 
@@ -15,6 +17,7 @@ This is **not** a P vs NP proof, a theory of everything, AGI, a formal certifica
 | Tier | Module | Path | On decision path? |
 |------|--------|------|-------------------|
 | **live** | `GovernedStack` | `src/governed_stack/stack.py` | **Yes** — ops → HAIS → Haven2 → optional QP/3DM |
+| **live** | `GovernedActionBus` | `src/governed_stack/action_bus.py` | **Yes** — mutation facade: require_allow before side_effect |
 | **live** | `GovernedMail` | `src/governed_stack/mail.py` | **Yes** — outbound mail gate |
 | **live** | `GovernedCalendar` | `src/governed_stack/calendar.py` | **Yes** — calendar write gate |
 | **live** | `GovernedPost` | `src/governed_stack/social.py` | **Yes** — outbound social/post gate |
@@ -103,6 +106,45 @@ pip install -e ".[dev]"            # optional; PYTHONPATH also works
 **Never call social publish/create_post until `GovernedPost.check` returns ALLOW.** Prefer `require_allow` / `HavenUnified().post`. Agent rules: `src/governed_stack/AGENT_SOCIAL.md`.
 
 
+
+## Governed action bus (no bypass)
+
+`GovernedActionBus` is the **only** public mutation helper: every outbound
+mail / calendar / social / tool side effect must pass `require_allow` (or
+tool `govern`) **before** the callback runs. BLOCK/REVIEW raise `SendBlocked`
+(`ActionDenied`) — no “check optional, send anyway.”
+
+```bash
+.venv/bin/python scripts/governed_action_demo.py          # dry-run ALLOW + BLOCK
+.venv/bin/python scripts/send_governed_mail.py \
+  --to alice@example.com --subject "Lunch" --body "Are you free tomorrow?"
+```
+
+```python
+from governed_stack import GovernedActionBus, ActionDenied
+
+bus = GovernedActionBus()
+
+def send_mock(result):
+    print("would send", result["to"])  # real Gmail only here, after ALLOW
+    return {"mock": True}
+
+try:
+    bus.execute_sync(
+        "mail",
+        to="alice@example.com",
+        subject="Lunch",
+        body="Are you free tomorrow?",
+        side_effect=send_mock,
+    )
+except ActionDenied as exc:
+    print("refused", exc.result["decision"])  # side_effect never called
+```
+
+Channels: `mail` | `calendar` | `social` | `tool` (raw `GovernIntent` /
+`parse_intent`). The HTTP sidecar remains **check-only** — `POST /v1/execute`
+is refused; mutations are library-side only.
+
 ## Customer ops
 
 Customer-operable live gate: stdlib HTTP sidecar (check-only), multi-tenant lite (API-key → isolated audit DB) + per-tenant rate limits, concurrent audit soak, threat model, runbook, and example env.
@@ -121,7 +163,7 @@ curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```
 
-`POST /v1/check` decides ALLOW/REVIEW/BLOCK for mail/calendar/social/raw — **never sends**. Auth: single `GOVERNANCE_API_KEY` or multi-tenant `GOVERNANCE_API_KEYS` / `GOVERNANCE_TENANTS_JSON` (`X-API-Key` → tenant). Rate limit: `GOVERNANCE_RATE_LIMIT_PER_MIN` (default 60) on `/v1/*`. Operator loop: `scripts/review_ops.py`, `scripts/audit_verify.py`, `scripts/metrics_report.py`.
+`POST /v1/check` decides ALLOW/REVIEW/BLOCK for mail/calendar/social/raw — **never sends**. Mutations: in-process `GovernedActionBus` only (`POST /v1/execute` refused). Auth: single `GOVERNANCE_API_KEY` or multi-tenant `GOVERNANCE_API_KEYS` / `GOVERNANCE_TENANTS_JSON` (`X-API-Key` → tenant). Rate limit: `GOVERNANCE_RATE_LIMIT_PER_MIN` (default 60) on `/v1/*`. Operator loop: `scripts/review_ops.py`, `scripts/audit_verify.py`, `scripts/metrics_report.py`.
 
 ## Keys (signing)
 
