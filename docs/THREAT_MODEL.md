@@ -3,7 +3,7 @@
 Short, honest model for operators running the customer-ops sidecar / `GovernedStack`.
 Not a formal certification, penetration-test report, or SaaS security whitepaper.
 
-Package context: **0.4.2** customer-ops hardening (concurrent audit soak + this doc).
+Package context: **0.4.3** — concurrent audit hash-chain race fix (single-writer lock + monotonic ts under lock); builds on 0.4.2 soak + this doc.
 
 ## Assets
 
@@ -32,7 +32,7 @@ Package context: **0.4.2** customer-ops hardening (concurrent audit soak + this 
 | **Rate abuse** | Sidecar in-memory sliding window per tenant (`GOVERNANCE_RATE_LIMIT_PER_MIN`); ops user rate signals | Process-local only; restart resets; not Redis/distributed |
 | **REVIEW voucher replay** | Single-use jti revoke after durable ALLOW+log; hard gates still apply | Stolen unused voucher still works until use/expiry |
 | **Sketch confusion** | Catalog/README mark sketches off-path; soak/tests exercise live `govern()` only | Operators wiring sketches into production themselves |
-| **Concurrent audit corruption** | `AuditStorage` WAL + `_chain_lock`; soak test `tests/test_audit_soak.py` | Identical intents may cache-hit (TTL) and skip a new row — expected |
+| **Concurrent audit corruption** | `AuditStorage` WAL + **single-writer** `_chain_lock` held across tip→ts→hash→INSERT; monotonic timestamps under lock; soak `tests/test_audit_soak.py` | Identical intents may cache-hit (TTL) and skip a new row — expected. Multi-process writers to one DB are **not** supported for chain integrity. |
 
 ## Explicit non-claims
 

@@ -435,14 +435,22 @@ class AuditStorage:
     """
     Hash-chained, RSA-signed audit log with integrity verification
     and exportable reports.
+
+    Concurrent appends: WAL + per-thread connections allow parallel DB I/O,
+    but hash-chain linking requires a single logical writer — ``_chain_lock``
+    serializes tip read → monotonic timestamp → hash/sign → INSERT → tip update.
     """
 
     def __init__(self, db_path: str, crypto: CryptoEngine):
         self.db_path = db_path
         self.crypto = crypto
         self._local = threading.local()
+        # Single-writer lock for hash-chain integrity: SQLite WAL allows
+        # concurrent readers, but prev_hash → entry_hash linking must be
+        # serialized across threads (one logical writer for the chain).
         self._chain_lock = threading.Lock()
         self._last_hash = GENESIS_HASH
+        self._last_ts = 0.0
         self._init_schema()
 
     @property
@@ -501,11 +509,14 @@ class AuditStorage:
         )
         self.conn.commit()
 
+        # Prefer insertion order (rowid) over timestamp when seeding tip —
+        # timestamps alone can race under concurrent writers (fixed in 0.4.3).
         row = cur.execute(
-            "SELECT entry_hash FROM audit_log ORDER BY timestamp DESC LIMIT 1"
+            "SELECT entry_hash, timestamp FROM audit_log ORDER BY rowid DESC LIMIT 1"
         ).fetchone()
         if row:
             self._last_hash = row["entry_hash"]
+            self._last_ts = float(row["timestamp"] or 0.0)
 
     def close(self) -> None:
         """Close the thread-local SQLite connection if present and clear it."""
@@ -543,10 +554,19 @@ class AuditStorage:
         Log a governed decision into the audit chain.
         """
         entry_id = str(uuid.uuid4())
-        ts = time.time()
         envelope = {"data": base64.b64encode(json.dumps(intent).encode()).decode()}
 
+        # Hold _chain_lock across: assign ts → read tip → hash/sign → INSERT
+        # → commit → update tip. Timestamp must be taken under the lock so
+        # verify_chain (ORDER BY timestamp, rowid) matches link order. Taking
+        # time.time() *before* the lock let thread A stamp earlier than B but
+        # acquire the lock after B — prev_hash linked to B while timestamp
+        # order put A first → broken chain under parallel writers.
         with self._chain_lock:
+            ts = time.time()
+            if ts <= self._last_ts:
+                # Strictly monotonic under the writer lock (clock skew / ties).
+                ts = self._last_ts + 1e-6
             prev_hash = self._last_hash
             body = json.dumps(
                 {
@@ -604,6 +624,7 @@ class AuditStorage:
                 )
             self.conn.commit()
             self._last_hash = entry_hash
+            self._last_ts = ts
         return entry_id
 
     def list_pending_reviews(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -761,7 +782,7 @@ class AuditStorage:
             """
             SELECT id, timestamp, decision, result, intent_envelope,
                    prev_hash, entry_hash, signature, engine_version, environment_id
-            FROM audit_log ORDER BY timestamp ASC
+            FROM audit_log ORDER BY timestamp ASC, rowid ASC
             """
         ).fetchall()
 

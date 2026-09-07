@@ -2,7 +2,12 @@
 
 SQLite WAL expectations (AuditStorage):
   - PRAGMA journal_mode=WAL + busy_timeout; per-thread connections via threading.local
-  - Hash-chain appends serialize on AuditStorage._chain_lock
+  - Hash-chain integrity needs a **single logical writer**: ``_chain_lock`` is held
+    across tip read → monotonic timestamp → hash/sign → INSERT → tip update.
+    (0.4.3: timestamp must be assigned under that lock; assigning it before the
+    lock let link order diverge from ``verify_chain`` timestamp order.)
+  - Multi-process concurrent writers to one audit DB are not supported for a
+    valid hash chain — use one process (or an external single-writer queue).
   - Identical intents may hit GovernanceCache (TTL) and skip a new audit row —
     this soak uses unique nonces so each call writes a chain entry
   - Call AuditStorage.close() after the soak to release the thread-local

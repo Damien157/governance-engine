@@ -1,12 +1,12 @@
 # Thin customer-ops sidecar image (check-only HTTP gate).
 # Build from repo root:
-#   docker build -t governed-sidecar:0.4.2 .
+#   docker build -t governed-sidecar:0.4.3 .
 # Run (mount artifacts for key/db persistence):
 #   docker run --rm -p 8080:8080 \
 #     -e GOVERNANCE_REQUIRE_PERSISTED_KEY=1 \
 #     -e GOVERNANCE_API_KEY=... \
 #     -v "$PWD/artifacts/customer:/app/artifacts/customer" \
-#     governed-sidecar:0.4.2
+#     governed-sidecar:0.4.3
 #
 # Tests do not require Docker; this is an optional deploy shape.
 
