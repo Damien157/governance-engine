@@ -170,6 +170,7 @@ def main() -> int:
         "tests.test_observability",
         "tests.test_contracts",
         "tests.test_sidecar",
+        "tests.test_audit_soak",
     ]
     math_modules = [
         "tests.test_math_cores",

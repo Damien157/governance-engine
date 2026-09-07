@@ -2,7 +2,7 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.4.1` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
+**Package version:** `0.4.2` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social adapters.
 
@@ -103,9 +103,10 @@ pip install -e ".[dev]"            # optional; PYTHONPATH also works
 
 ## Customer ops
 
-Customer-operable live gate: stdlib HTTP sidecar (check-only), multi-tenant lite (API-key → isolated audit DB) + per-tenant rate limits, runbook, and example env.
+Customer-operable live gate: stdlib HTTP sidecar (check-only), multi-tenant lite (API-key → isolated audit DB) + per-tenant rate limits, concurrent audit soak, threat model, runbook, and example env.
 
 - Runbook: [`docs/CUSTOMER_OPS.md`](docs/CUSTOMER_OPS.md)
+- Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 - Example env: [`config/customer.env.example`](config/customer.env.example)
 - Sidecar: `src/governed_stack/sidecar.py` via `scripts/run_sidecar.py`
 - Optional thin `Dockerfile` (tests do not need Docker)

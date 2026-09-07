@@ -1,7 +1,7 @@
 # Customer operations — governed request gate
 
 Honest prototype → **operable service shape**. Customer-ops on the live gate
-(multi-tenant lite + rate limits in **0.4.1**). Not a full SaaS product yet.
+(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**). Not a full SaaS product yet.
 
 ## What this is
 
@@ -45,7 +45,7 @@ set -a && source /tmp/customer.env && set +a
 
 ```bash
 curl -s http://127.0.0.1:8080/health
-# {"status":"ok","version":"0.4.1"}
+# {"status":"ok","version":"0.4.2"}
 
 curl -s http://127.0.0.1:8080/ready
 # 200 {"status":"ready","reasons":[]}  — or 503 with reasons
@@ -83,12 +83,12 @@ Optional: `POST /v1/review/list` lists pending REVIEW rows (same engine as CLI).
 ### Optional Docker
 
 ```bash
-docker build -t governed-sidecar:0.4.1 .
+docker build -t governed-sidecar:0.4.2 .
 docker run --rm -p 8080:8080 \
   -e GOVERNANCE_REQUIRE_PERSISTED_KEY=1 \
   -e GOVERNANCE_API_KEY=... \
   -v "$PWD/artifacts/customer:/app/artifacts/customer" \
-  governed-sidecar:0.4.1
+  governed-sidecar:0.4.2
 ```
 
 Tests do **not** require Docker.
@@ -206,6 +206,12 @@ See `config/customer.env.example`.
 | **429 rate_limited** | `GOV_RATE_LIMIT` | Back off; raise `GOVERNANCE_RATE_LIMIT_PER_MIN` if legitimate |
 | **503 /ready** | Missing signing key path or audit parent not writable | Generate key; fix paths/permissions (all tenants when multi-tenant) |
 
+## Threat model
+
+Operator-facing assets, trust boundaries, threats/mitigations, and explicit non-claims: [`THREAT_MODEL.md`](THREAT_MODEL.md).
+
+Concurrent audit soak (CI): `tests/test_audit_soak.py` (manual: `scripts/audit_soak.py`).
+
 ## Honest limits
 
 - **Multi-tenant lite** — process-local registry, isolated SQLite paths, in-memory rate limits (not Redis / not billing).
@@ -217,4 +223,4 @@ See `config/customer.env.example`.
 
 ## Version
 
-Customer-ops milestone: package **0.4.1** (`governed_stack.__version__`).
+Customer-ops milestone: package **0.4.2** (`governed_stack.__version__`).
