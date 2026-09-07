@@ -330,11 +330,15 @@ class GovernedStack:
         solver_ok = decision == "ALLOW" and (
             transistor_open or action == "query"
         )
-        # Prefer: control/3dm require open transistor; query may proceed when ALLOW.
+        # Prefer: control/3dm require open transistor; query/mail/calendar/social may
+        # proceed when ALLOW (latch does not block those). Closed latch → BLOCK.
         if decision == "ALLOW" and action in ("control", "3dm") and not transistor_open:
+            decision = "BLOCK"
+            if "transistor_closed" not in reasons:
+                reasons.append("transistor_closed")
             notes.append(
-                "haven2 transistor closed: solvers skipped (realm cannot switch); "
-                "text/query would still be ALLOW"
+                "haven2 transistor/latch closed: control/3dm blocked "
+                "(GOV_LATCH_CLOSED); query/mail/calendar/social would still be ALLOW"
             )
             solver_ok = False
 

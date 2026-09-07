@@ -3,7 +3,7 @@
 Short, honest model for operators running the customer-ops sidecar / `GovernedStack`.
 Not a formal certification, penetration-test report, or SaaS security whitepaper.
 
-Package context: **0.4.3** — concurrent audit hash-chain race fix (single-writer lock + monotonic ts under lock); builds on 0.4.2 soak + this doc.
+Package context: **0.4.4** — bug→fix pass on live contracts + latch; builds on 0.4.3 audit chain race fix + this doc.
 
 ## Assets
 

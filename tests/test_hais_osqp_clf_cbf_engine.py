@@ -15,6 +15,7 @@ from solvers.hais_osqp_clf_cbf_engine import (  # noqa: E402
     GovernanceEngine,
     DoubleIntegratorDynamics,
     PositionCBF,
+    SurrogatePositionCBFBroken,
     QuadraticCLF,
     nominal_pd_controller,
     run_closed_loop,
@@ -49,22 +50,39 @@ class TestHaisOsqpEngine(unittest.TestCase):
         )
         self.assertEqual(status, "FAIL_SAFE_TRIGGERED")
 
-    def test_closed_loop_surrogate_cbf_not_certified(self):
-        """Honest: PositionCBF is illustrative — does NOT keep |p|<=p_max here."""
+    def test_closed_loop_position_cbf_forward_invariant(self):
+        """Fixed HOCBF PositionCBF keeps |p|<=p_max under closed-loop QP."""
         eng = GovernanceEngine(dim_u=1, max_cbf_constraints=4)
+        cbf = PositionCBF(p_max=1.0, alpha0=2.0, alpha1=2.0)
         traj = run_closed_loop(
             engine=eng,
             dynamics=DoubleIntegratorDynamics(dt=0.01),
-            cbf=PositionCBF(p_max=1.0),
+            cbf=cbf,
             clf=QuadraticCLF(),
             nominal_controller=nominal_pd_controller,
             x0=np.array([0.8, 0.0]),
             steps=200,
         )
-        safe = forward_invariant(traj, PositionCBF(p_max=1.0).h, tol=1e-3)
-        # Document reality: surrogate does not certify invariance in this demo.
+        safe = forward_invariant(traj, cbf.h, tol=1e-3)
+        self.assertTrue(safe)
+        self.assertGreaterEqual(min_barrier_value(traj, cbf.h), -1e-3)
+
+    def test_legacy_surrogate_not_forward_invariant(self):
+        """Regression: pre-fix surrogate barrier does NOT keep the safe set."""
+        eng = GovernanceEngine(dim_u=1, max_cbf_constraints=4)
+        broken = SurrogatePositionCBFBroken(p_max=1.0)
+        traj = run_closed_loop(
+            engine=eng,
+            dynamics=DoubleIntegratorDynamics(dt=0.01),
+            cbf=broken,
+            clf=QuadraticCLF(),
+            nominal_controller=nominal_pd_controller,
+            x0=np.array([0.8, 0.0]),
+            steps=200,
+        )
+        safe = forward_invariant(traj, broken.h, tol=1e-3)
         self.assertFalse(safe)
-        self.assertLess(min_barrier_value(traj, PositionCBF(p_max=1.0).h), 0.0)
+        self.assertLess(min_barrier_value(traj, broken.h), 0.0)
 
 
 if __name__ == "__main__":

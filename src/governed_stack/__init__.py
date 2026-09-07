@@ -5,7 +5,7 @@ GovernedDecisionEngine is the live decide adapter.
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 
 from .calendar import CalendarBlocked, GovernedCalendar

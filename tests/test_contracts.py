@@ -10,9 +10,12 @@ from pathlib import Path
 
 from certified_governance_unified import CryptoEngine
 
+from pydantic import ValidationError
+
 from governed_stack.contracts import (
     GOV_HAIS_CAP,
     GOV_INTENT_INVALID,
+    GOV_LATCH_CLOSED,
     GOV_POLICY_BLOCK,
     CalendarScanIntent,
     GovernIntent,
@@ -74,21 +77,58 @@ class TestIntentParsing(unittest.TestCase):
         self.assertIsInstance(g, GovernIntent)
         self.assertEqual(g.action, "query")
 
-    def test_mail_scan_extra_to_ignored_on_model(self):
-        # extra=ignore: smuggled `to` is not a field; dump has no recipients.
-        m = MailScanIntent.model_validate(
-            {
-                "action": "send_email",
-                "payload": {"subject": "x", "text": "y", "to": "secret@x.com"},
-                "to": "also@x.com",
-                "cc": ["c@x.com"],
-            }
-        )
+    def test_mail_scan_smuggled_to_rejected(self):
+        # Forbidden routing keys must not silently drop — raise / BLOCK.
+        with self.assertRaises(IntentValidationError) as ctx:
+            parse_intent(
+                {
+                    "action": "send_email",
+                    "payload": {"subject": "x", "text": "y"},
+                    "to": "also@x.com",
+                }
+            )
+        self.assertEqual(ctx.exception.code, GOV_INTENT_INVALID)
+        self.assertIn("scan_intent_forbids:to", str(ctx.exception))
+
+        with self.assertRaises((IntentValidationError, ValidationError)) as ctx2:
+            MailScanIntent.model_validate(
+                {
+                    "action": "send_email",
+                    "payload": {"subject": "x", "text": "y", "to": "secret@x.com"},
+                }
+            )
+        self.assertIn("scan_intent_forbids:to", str(ctx2.exception))
+
+        with self.assertRaises(IntentValidationError):
+            validate_mail_scan(subject="x", body="y", to="z@x.com")
+
+        # Clean scan still OK.
+        m = validate_mail_scan(subject="x", body="y")
         d = m.dump_for_govern()
-        self.assertNotIn("to", d)
-        self.assertNotIn("cc", d)
-        self.assertNotIn("to", d["payload"])
         self.assertEqual(d["payload"]["subject"], "x")
+        self.assertNotIn("to", d)
+
+    def test_calendar_social_smuggled_routing_rejected(self):
+        with self.assertRaises(IntentValidationError) as ctx:
+            parse_intent(
+                {
+                    "action": "calendar_write",
+                    "summary": "Sync",
+                    "attendees": ["a@x.com"],
+                }
+            )
+        self.assertIn("scan_intent_forbids:attendees", str(ctx.exception))
+
+        with self.assertRaises(IntentValidationError) as ctx2:
+            parse_intent(
+                {
+                    "action": "publish_post",
+                    "text": "hi",
+                    "platform": "x",
+                    "handles": ["@bot"],
+                }
+            )
+        self.assertIn("scan_intent_forbids:handles", str(ctx2.exception))
 
     def test_adapters_intent_for_scan_no_routing(self):
         mail_d = mail_intent_for_scan("Subj", "Body")
@@ -134,6 +174,10 @@ class TestIntentParsing(unittest.TestCase):
             "GOV_POLICY_REVIEW",
         )
         self.assertIsNone(map_error_code(decision="ALLOW", reasons=[]))
+        self.assertEqual(
+            map_error_code(decision="BLOCK", reasons=["transistor_closed"]),
+            GOV_LATCH_CLOSED,
+        )
 
 
 class TestGovernContractsSmoke(unittest.TestCase):
@@ -179,6 +223,63 @@ class TestGovernContractsSmoke(unittest.TestCase):
         env = asyncio.run(stack.govern(intent, token))
         self.assertNotEqual(env.get("error_code"), GOV_INTENT_INVALID)
         self.assertIn(env.get("decision"), ("ALLOW", "REVIEW", "BLOCK"))
+
+    def test_smuggled_to_on_mail_scan_blocks_intent_invalid(self):
+        stack = self._stack()
+        token = stack.issue_token("tester", "operator")
+        env = asyncio.run(
+            stack.govern(
+                {
+                    "action": "send_email",
+                    "payload": {"subject": "x", "text": "y"},
+                    "to": "smuggled@x.com",
+                },
+                token,
+            )
+        )
+        self.assertEqual(env.get("decision"), "BLOCK")
+        self.assertEqual(env.get("error_code"), GOV_INTENT_INVALID)
+        self.assertTrue(
+            any("scan_intent_forbids:to" in str(r) for r in (env.get("reasons") or []))
+            or any(
+                "scan_intent_forbids:to" in str(n) for n in (env.get("notes") or [])
+            )
+            or any(
+                "scan_intent_forbids:to" in str(e)
+                for e in ((env.get("audit") or {}).get("validation_errors") or [])
+            )
+            or any("intent_invalid" in str(r) for r in (env.get("reasons") or []))
+        )
+
+    def test_control_closed_latch_blocks_gov_latch_closed(self):
+        """control + Haven2 transistor closed → BLOCK + GOV_LATCH_CLOSED."""
+        stack = self._stack()
+        token = stack.issue_token("tester", "operator")
+        # Fresh stack: first ops risk leaves |p_hat| >> ε → latch closed.
+        env = asyncio.run(
+            stack.govern(
+                {
+                    "action": "control",
+                    "payload": {"difficulty": 0.1},
+                    "telemetry": {},
+                    "u_nom": 0.0,
+                },
+                token,
+            )
+        )
+        self.assertFalse((env.get("haven2") or {}).get("open"))
+        self.assertEqual(env.get("decision"), "BLOCK")
+        self.assertEqual(env.get("error_code"), GOV_LATCH_CLOSED)
+        self.assertIn("transistor_closed", env.get("reasons") or [])
+        # Query path unchanged: closed latch does not block query.
+        env_q = asyncio.run(
+            stack.govern(
+                {"action": "query", "payload": {"difficulty": 0.1}, "telemetry": {}},
+                token,
+            )
+        )
+        self.assertEqual(env_q.get("decision"), "ALLOW")
+        self.assertNotEqual(env_q.get("error_code"), GOV_LATCH_CLOSED)
 
 
 if __name__ == "__main__":

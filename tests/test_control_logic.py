@@ -6,33 +6,12 @@ test the pure functions the control loop evaluates every step.
 import unittest
 import numpy as np
 
-
-# ---- extracted verbatim from the control loop logic ----
-
-def cbf_correction(h_enst, vorticity_arr, cbf_gain, cbf_margin):
-    if h_enst < cbf_margin:
-        deficit = cbf_margin - h_enst
-        return -cbf_gain * deficit * vorticity_arr
-    else:
-        return 0 * vorticity_arr
-
-
-def adaptive_re_update(Ens, Reynolds, Re_target_enstrophy, Re_min, Re_max):
-    """Unclamped (documents overshoot bug). Prefer adaptive_re_update_clamped."""
-    if Ens < Re_target_enstrophy and Reynolds < Re_max:
-        Reynolds *= 1.01
-    elif Ens > Re_target_enstrophy and Reynolds > Re_min:
-        Reynolds *= 0.99
-    return Reynolds
-
-
-def adaptive_re_update_clamped(Ens, Reynolds, Re_target_enstrophy, Re_min, Re_max):
-    """Fixed version matching tg_vortex_control_fixed.py."""
-    if Ens < Re_target_enstrophy:
-        Reynolds *= 1.01
-    elif Ens > Re_target_enstrophy:
-        Reynolds *= 0.99
-    return min(max(Reynolds, Re_min), Re_max)
+from fluids.control_law import (
+    adaptive_re_update,
+    adaptive_re_update_clamped,
+    adaptive_re_update_unclamped,
+    cbf_correction,
+)
 
 
 class TestCBFCorrection(unittest.TestCase):
@@ -82,18 +61,27 @@ class TestAdaptiveReUpdate(unittest.TestCase):
                                  Re_min=400, Re_max=2000)
         self.assertLess(Re, 800)
 
-    def test_CAN_OVERSHOOT_re_max(self):
-        """Documents unclamped bug: one step below max can overshoot."""
+    def test_default_clamped_near_bounds(self):
+        """Default adaptive_re_update is clamped — no overshoot at the edge."""
         Re_max = 2000
         Re = adaptive_re_update(Ens=0.1, Reynolds=1999, Re_target_enstrophy=0.6,
                                  Re_min=400, Re_max=Re_max)
-        self.assertGreater(Re, Re_max)
-
-    def test_CAN_UNDERSHOOT_re_min(self):
+        self.assertLessEqual(Re, Re_max)
         Re_min = 400
-        Re = adaptive_re_update(Ens=1.0, Reynolds=401, Re_target_enstrophy=0.6,
-                                 Re_min=Re_min, Re_max=2000)
-        self.assertLess(Re, Re_min)
+        Re2 = adaptive_re_update(Ens=1.0, Reynolds=401, Re_target_enstrophy=0.6,
+                                  Re_min=Re_min, Re_max=2000)
+        self.assertGreaterEqual(Re2, Re_min)
+
+    def test_unclamped_opt_in_can_overshoot(self):
+        """Regression: unclamped is opt-in only and can leave [Re_min, Re_max]."""
+        Re_max = 2000
+        Re = adaptive_re_update_unclamped(Ens=0.1, Reynolds=1999, Re_target_enstrophy=0.6,
+                                          Re_min=400, Re_max=Re_max)
+        self.assertGreater(Re, Re_max)
+        Re_min = 400
+        Re2 = adaptive_re_update_unclamped(Ens=1.0, Reynolds=401, Re_target_enstrophy=0.6,
+                                           Re_min=Re_min, Re_max=2000)
+        self.assertLess(Re2, Re_min)
 
     def test_clamped_version_stays_in_bounds(self):
         Re = 1999

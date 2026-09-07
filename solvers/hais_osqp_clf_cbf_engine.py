@@ -362,15 +362,11 @@ class DoubleIntegratorDynamics:
         v_next = v + self.dt * a
         return np.array([p_next, v_next])
 
-class PositionCBF:
+class SurrogatePositionCBFBroken:
     """
-    Barrier: h(x) = p_max - |p|
-    Safe set: |p| <= p_max
-    For relative-degree-2 system, caller must construct higher-order CBF.
-    Here we use a simple linear-in-u surrogate:
-        h_dot ≈ -k1 * p - k2 * v + u
-    and enforce h_dot + alpha * h >= 0 as A_cbf u <= b_cbf.
-    This is illustrative, not a full high-order CBF derivation.
+    Legacy illustrative surrogate (NOT forward-invariant under closed-loop QP).
+
+    Kept for regression: documents the pre-0.4.4 bug surface. Prefer PositionCBF.
     """
     def __init__(self, p_max: float, k1: float = 1.0, k2: float = 1.0, alpha: float = 1.0):
         self.p_max = p_max
@@ -385,13 +381,44 @@ class PositionCBF:
     def build(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         p, v = x
         h_x = self.h(x)
-        # surrogate: h_dot + alpha h >= 0
-        # h_dot ≈ -k1 * p - k2 * v + u
-        # => (-k1 * p - k2 * v + u) + alpha * h_x >= 0
-        # => u >= k1 * p + k2 * v - alpha * h_x
-        # => -u <= -(k1 * p + k2 * v - alpha * h_x)
-        A_cbf = np.array([[-1.0]])  # -u <= ...
+        A_cbf = np.array([[-1.0]])
         b_cbf = np.array([-(self.k1 * p + self.k2 * v - self.alpha * h_x)])
+        return A_cbf, b_cbf
+
+
+class PositionCBF:
+    """
+    Higher-order CBF for double-integrator position limit |p| <= p_max.
+
+    Barrier: h(x) = p_max - |p| (relative degree 2).
+    Enforce ψ̇ + α₁ ψ ≥ 0 with ψ = ḣ + α₀ h, which is linear in u:
+
+      p ≥ 0:  u ≤ -(α₀+α₁)v + α₀α₁ (p_max - p)
+      p < 0: -u ≤  (α₀+α₁)v + α₀α₁ (p_max + p)
+
+    Closed-loop under the OSQP CLF-CBF QP is forward-invariant for the demo
+    (sketch only — not wired into live govern()).
+    """
+    def __init__(self, p_max: float, alpha0: float = 2.0, alpha1: float = 2.0):
+        self.p_max = p_max
+        self.alpha0 = float(alpha0)
+        self.alpha1 = float(alpha1)
+
+    def h(self, x: np.ndarray) -> float:
+        p = x[0]
+        return self.p_max - abs(p)
+
+    def build(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        p, v = float(x[0]), float(x[1])
+        a0, a1 = self.alpha0, self.alpha1
+        if p >= 0.0:
+            # u <= -(a0+a1)*v + a0*a1*(p_max - p)
+            A_cbf = np.array([[1.0]])
+            b_cbf = np.array([-(a0 + a1) * v + (a0 * a1) * (self.p_max - p)])
+        else:
+            # -u <= (a0+a1)*v + a0*a1*(p_max + p)
+            A_cbf = np.array([[-1.0]])
+            b_cbf = np.array([(a0 + a1) * v + (a0 * a1) * (self.p_max + p)])
         return A_cbf, b_cbf
 
 class QuadraticCLF:
@@ -430,7 +457,7 @@ if __name__ == "__main__":
     engine = GovernanceEngine(dim_u=dim_u, max_cbf_constraints=max_cbf)
 
     dynamics = DoubleIntegratorDynamics(dt=0.01)
-    cbf = PositionCBF(p_max=1.0, k1=1.0, k2=1.0, alpha=1.0)
+    cbf = PositionCBF(p_max=1.0, alpha0=2.0, alpha1=2.0)
     clf = QuadraticCLF(alpha=1.0)
 
     x0 = np.array([0.8, 0.0])  # start near boundary

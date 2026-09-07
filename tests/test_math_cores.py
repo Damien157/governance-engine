@@ -169,7 +169,7 @@ class TestLiveCVXOPTQP(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# OSQP sketch honesty (NOT on govern path)
+# OSQP sketch (NOT on govern path; PositionCBF HOCBF forward-invariant)
 # ---------------------------------------------------------------------------
 
 
@@ -189,8 +189,8 @@ class TestOSQPSketchHonesty(unittest.TestCase):
         self.assertEqual(status, "FAIL_SAFE_TRIGGERED")
         np.testing.assert_array_equal(u, [0.0])
 
-    def test_position_cbf_closed_loop_not_forward_invariant(self) -> None:
-        """Known bug surface: PositionCBF demo does NOT keep the safe set."""
+    def test_position_cbf_closed_loop_forward_invariant(self) -> None:
+        """Fixed: HOCBF PositionCBF keeps the safe set under closed-loop QP."""
         from solvers.hais_osqp_clf_cbf_engine import (
             DoubleIntegratorDynamics,
             GovernanceEngine,
@@ -203,58 +203,78 @@ class TestOSQPSketchHonesty(unittest.TestCase):
         )
 
         eng = GovernanceEngine(dim_u=1, max_cbf_constraints=4)
+        cbf = PositionCBF(p_max=1.0, alpha0=2.0, alpha1=2.0)
         traj = run_closed_loop(
             engine=eng,
             dynamics=DoubleIntegratorDynamics(dt=0.01),
-            cbf=PositionCBF(p_max=1.0),
+            cbf=cbf,
             clf=QuadraticCLF(),
             nominal_controller=nominal_pd_controller,
             x0=np.array([0.8, 0.0]),
             steps=200,
         )
-        cbf = PositionCBF(p_max=1.0)
         safe = forward_invariant(traj, cbf.h, tol=1e-3)
+        self.assertTrue(safe)
+        self.assertGreaterEqual(min_barrier_value(traj, cbf.h), -1e-3)
+
+    def test_legacy_surrogate_not_forward_invariant(self) -> None:
+        """Regression: old surrogate barrier fails forward-invariance."""
+        from solvers.hais_osqp_clf_cbf_engine import (
+            DoubleIntegratorDynamics,
+            GovernanceEngine,
+            QuadraticCLF,
+            SurrogatePositionCBFBroken,
+            forward_invariant,
+            min_barrier_value,
+            nominal_pd_controller,
+            run_closed_loop,
+        )
+
+        eng = GovernanceEngine(dim_u=1, max_cbf_constraints=4)
+        broken = SurrogatePositionCBFBroken(p_max=1.0)
+        traj = run_closed_loop(
+            engine=eng,
+            dynamics=DoubleIntegratorDynamics(dt=0.01),
+            cbf=broken,
+            clf=QuadraticCLF(),
+            nominal_controller=nominal_pd_controller,
+            x0=np.array([0.8, 0.0]),
+            steps=200,
+        )
+        safe = forward_invariant(traj, broken.h, tol=1e-3)
         self.assertFalse(safe)
-        self.assertLess(min_barrier_value(traj, cbf.h), 0.0)
+        self.assertLess(min_barrier_value(traj, broken.h), 0.0)
 
 
 # ---------------------------------------------------------------------------
-# control_law adaptive Re (known overshoot without clamp)
+# control_law adaptive Re (default clamped; unclamped opt-in)
 # ---------------------------------------------------------------------------
-
-
-def _adaptive_re_update(Ens, Reynolds, Re_target_enstrophy, Re_min, Re_max):
-    """Unclamped (documents overshoot bug)."""
-    if Ens < Re_target_enstrophy and Reynolds < Re_max:
-        Reynolds *= 1.01
-    elif Ens > Re_target_enstrophy and Reynolds > Re_min:
-        Reynolds *= 0.99
-    return Reynolds
-
-
-def _adaptive_re_update_clamped(Ens, Reynolds, Re_target_enstrophy, Re_min, Re_max):
-    if Ens < Re_target_enstrophy:
-        Reynolds *= 1.01
-    elif Ens > Re_target_enstrophy:
-        Reynolds *= 0.99
-    return min(max(Reynolds, Re_min), Re_max)
 
 
 class TestControlLawAdaptiveRe(unittest.TestCase):
-    def test_clamped_stays_in_bounds(self) -> None:
+    def test_default_adaptive_re_update_is_clamped(self) -> None:
+        from fluids.control_law import adaptive_re_update, adaptive_re_update_clamped
+
         Re = 1999.0
         for _ in range(50):
-            Re = _adaptive_re_update_clamped(0.1, Re, 0.6, 400.0, 2000.0)
+            Re = adaptive_re_update(0.1, Re, 0.6, 400.0, 2000.0)
         self.assertLessEqual(Re, 2000.0)
         self.assertGreaterEqual(Re, 400.0)
+        # Alias identity: public adaptive_re_update == clamped behaviour.
+        self.assertEqual(
+            adaptive_re_update(0.1, 1999.0, 0.6, 400.0, 2000.0),
+            adaptive_re_update_clamped(0.1, 1999.0, 0.6, 400.0, 2000.0),
+        )
 
-    def test_unclamped_can_overshoot(self) -> None:
-        """Known documented issue: unclamped adaptive Re can leave [Re_min, Re_max]."""
+    def test_unclamped_opt_in_can_overshoot(self) -> None:
+        """Regression: unclamped is opt-in only and can leave [Re_min, Re_max]."""
+        from fluids.control_law import adaptive_re_update_unclamped
+
         Re_max = 2000.0
-        Re = _adaptive_re_update(0.1, 1999.0, 0.6, 400.0, Re_max)
+        Re = adaptive_re_update_unclamped(0.1, 1999.0, 0.6, 400.0, Re_max)
         self.assertGreater(Re, Re_max)
         Re_min = 400.0
-        Re2 = _adaptive_re_update(1.0, 401.0, 0.6, Re_min, 2000.0)
+        Re2 = adaptive_re_update_unclamped(1.0, 401.0, 0.6, Re_min, 2000.0)
         self.assertLess(Re2, Re_min)
 
 

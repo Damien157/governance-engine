@@ -2,7 +2,9 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.4.3` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
+**Package version:** `0.4.4` (customer-ops milestone; CI gates **ruff** + **mypy** on `src/governed_stack`).
+
+**Bug→fix log:** [`docs/BUGFIXES.md`](docs/BUGFIXES.md) (0.4.4 latch BLOCK, scan routing reject, clamped Re default, PositionCBF HOCBF; plus 0.4.3 audit chain race).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social adapters.
 

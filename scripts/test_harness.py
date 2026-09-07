@@ -19,8 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 KNOWN_DOCUMENTED_ISSUES = [
-    "adaptive Re overshoot without clamp (use adaptive_re_update_clamped)",
-    "OSQP PositionCBF closed-loop is NOT forward-invariant (sketch honesty)",
+    "adaptive_re_update_unclamped is opt-in only (default adaptive_re_update is clamped)",
     "TG Dedalus: no sym_grad (fluids smoke skips / incomplete without Dedalus)",
 ]
 

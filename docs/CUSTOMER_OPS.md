@@ -1,7 +1,7 @@
 # Customer operations — governed request gate
 
 Honest prototype → **operable service shape**. Customer-ops on the live gate
-(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**; audit chain race fix in **0.4.3**). Not a full SaaS product yet.
+(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**; audit chain race fix in **0.4.3**; bug→fix pass in **0.4.4**). Not a full SaaS product yet.
 
 ## What this is
 
@@ -45,7 +45,7 @@ set -a && source /tmp/customer.env && set +a
 
 ```bash
 curl -s http://127.0.0.1:8080/health
-# {"status":"ok","version":"0.4.3"}
+# {"status":"ok","version":"0.4.4"}
 
 curl -s http://127.0.0.1:8080/ready
 # 200 {"status":"ready","reasons":[]}  — or 503 with reasons
@@ -83,12 +83,12 @@ Optional: `POST /v1/review/list` lists pending REVIEW rows (same engine as CLI).
 ### Optional Docker
 
 ```bash
-docker build -t governed-sidecar:0.4.3 .
+docker build -t governed-sidecar:0.4.4 .
 docker run --rm -p 8080:8080 \
   -e GOVERNANCE_REQUIRE_PERSISTED_KEY=1 \
   -e GOVERNANCE_API_KEY=... \
   -v "$PWD/artifacts/customer:/app/artifacts/customer" \
-  governed-sidecar:0.4.3
+  governed-sidecar:0.4.4
 ```
 
 Tests do **not** require Docker.
@@ -223,4 +223,4 @@ Concurrent audit soak (CI): `tests/test_audit_soak.py` (manual: `scripts/audit_s
 
 ## Version
 
-Customer-ops milestone: package **0.4.3** (`governed_stack.__version__`) — concurrent audit hash-chain race fix.
+Customer-ops milestone: package **0.4.4** (`governed_stack.__version__`) — bug→fix pass (latch BLOCK, scan routing reject, clamped Re default, PositionCBF HOCBF). See [`BUGFIXES.md`](BUGFIXES.md).

@@ -8,7 +8,7 @@ Validation choice (documented):
   IntentValidationError for unit tests and adapter builders.
 
 Sketches must not import this module for solvers; contracts are live-gate only.
-To/Cc/attendees/start/end/handles/URLs are not fields on scan intents.
+To/Cc/attendees/start/end/handles/URLs are forbidden on scan intents (scan_intent_forbids:* → GOV_INTENT_INVALID); silent drop is not allowed.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Stable error codes
@@ -54,6 +54,49 @@ class IntentValidationError(ValueError):
         super().__init__(message)
         self.code = GOV_INTENT_INVALID
         self.errors = list(errors or [])
+
+
+
+
+# ---------------------------------------------------------------------------
+# Scan intents: reject smuggled routing fields (no silent drop)
+# ---------------------------------------------------------------------------
+
+MAIL_SCAN_FORBIDDEN = frozenset({"to", "cc", "bcc", "from"})
+CALENDAR_SCAN_FORBIDDEN = frozenset({"attendees", "start", "end"})
+SOCIAL_SCAN_FORBIDDEN = frozenset({"handles", "urls", "recipients"})
+
+
+def _reject_forbidden_scan_keys(
+    data: Any,
+    forbidden: frozenset,
+    *,
+    where: str = "intent",
+) -> None:
+    """Raise IntentValidationError if *data* (dict) contains forbidden routing keys.
+
+    Also inspects a nested ``payload`` dict when present.
+    """
+    if not isinstance(data, dict):
+        return
+    for key in forbidden:
+        if key in data:
+            raise IntentValidationError(
+                f"scan_intent_forbids:{key}",
+                errors=[{"loc": [where, key], "msg": f"scan_intent_forbids:{key}", "type": "forbidden_routing"}],
+            )
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        for key in forbidden:
+            if key in payload:
+                raise IntentValidationError(
+                    f"scan_intent_forbids:{key}",
+                    errors=[{
+                        "loc": [where, "payload", key],
+                        "msg": f"scan_intent_forbids:{key}",
+                        "type": "forbidden_routing",
+                    }],
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +147,12 @@ class MailScanIntent(GovernIntent):
     action: str = "send_email"
     payload: MailScanPayload = Field(default_factory=MailScanPayload)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_routing_fields(cls, data: Any) -> Any:
+        _reject_forbidden_scan_keys(data, MAIL_SCAN_FORBIDDEN, where="mail")
+        return data
+
     @classmethod
     def from_scan(cls, subject: str, body: str, **kwargs: Any) -> "MailScanIntent":
         return cls(
@@ -142,6 +191,12 @@ class CalendarScanIntent(GovernIntent):
     description: str = ""
     location: str = ""
     payload: Optional[CalendarScanPayload] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_routing_fields(cls, data: Any) -> Any:
+        _reject_forbidden_scan_keys(data, CALENDAR_SCAN_FORBIDDEN, where="calendar")
+        return data
 
     @classmethod
     def from_scan(
@@ -194,6 +249,12 @@ class SocialScanIntent(GovernIntent):
     text: str = ""
     platform: str = ""
     payload: Optional[SocialScanPayload] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_routing_fields(cls, data: Any) -> Any:
+        _reject_forbidden_scan_keys(data, SOCIAL_SCAN_FORBIDDEN, where="social")
+        return data
 
     @classmethod
     def from_scan(
@@ -262,6 +323,7 @@ def parse_intent(raw: dict) -> GovernIntent:
     model_cls = _CHANNEL_ACTIONS.get(action, GovernIntent) if isinstance(action, str) else GovernIntent
     try:
         if model_cls is MailScanIntent:
+            _reject_forbidden_scan_keys(raw, MAIL_SCAN_FORBIDDEN, where="mail")
             # Prefer payload subject/text; allow top-level subject/body aliases.
             if "payload" not in raw and ("subject" in raw or "body" in raw):
                 return MailScanIntent.from_scan(
@@ -275,6 +337,7 @@ def parse_intent(raw: dict) -> GovernIntent:
                 )
             return MailScanIntent.model_validate(raw)
         if model_cls is CalendarScanIntent:
+            _reject_forbidden_scan_keys(raw, CALENDAR_SCAN_FORBIDDEN, where="calendar")
             if "summary" in raw and "payload" not in raw:
                 return CalendarScanIntent.from_scan(
                     summary=str(raw.get("summary", "")),
@@ -290,14 +353,12 @@ def parse_intent(raw: dict) -> GovernIntent:
                             "location",
                             "action",
                             "payload",
-                            "attendees",
-                            "start",
-                            "end",
                         )
                     },
                 )
             return CalendarScanIntent.model_validate(raw)
         if model_cls is SocialScanIntent:
+            _reject_forbidden_scan_keys(raw, SOCIAL_SCAN_FORBIDDEN, where="social")
             if ("text" in raw or "platform" in raw) and "payload" not in raw:
                 return SocialScanIntent.from_scan(
                     text=str(raw.get("text", raw.get("body", ""))),
@@ -312,14 +373,19 @@ def parse_intent(raw: dict) -> GovernIntent:
                             "platform",
                             "action",
                             "payload",
-                            "recipients",
-                            "urls",
                         )
                     },
                 )
             return SocialScanIntent.model_validate(raw)
         return GovernIntent.model_validate(raw)
+    except IntentValidationError:
+        raise
     except ValidationError as exc:
+        # Preserve scan_intent_forbids:* if wrapped into a ValidationError message.
+        for err in exc.errors():
+            msg = str(err.get("msg", ""))
+            if msg.startswith("scan_intent_forbids:"):
+                raise IntentValidationError(msg, errors=exc.errors()) from exc
         raise IntentValidationError(
             "intent schema validation failed",
             errors=exc.errors(),
@@ -328,8 +394,11 @@ def parse_intent(raw: dict) -> GovernIntent:
 
 def validate_mail_scan(subject: str, body: str, **kwargs: Any) -> MailScanIntent:
     """Build + validate a MailScanIntent; raises IntentValidationError."""
+    _reject_forbidden_scan_keys(kwargs, MAIL_SCAN_FORBIDDEN, where="mail")
     try:
         return MailScanIntent.from_scan(subject=subject, body=body, **kwargs)
+    except IntentValidationError:
+        raise
     except ValidationError as exc:
         raise IntentValidationError(
             "mail scan intent invalid",
@@ -349,10 +418,13 @@ def validate_calendar_scan(
     location: str = "",
     **kwargs: Any,
 ) -> CalendarScanIntent:
+    _reject_forbidden_scan_keys(kwargs, CALENDAR_SCAN_FORBIDDEN, where="calendar")
     try:
         return CalendarScanIntent.from_scan(
             summary=summary, description=description, location=location, **kwargs
         )
+    except IntentValidationError:
+        raise
     except (ValidationError, TypeError, ValueError) as exc:
         raise IntentValidationError(
             "calendar scan intent invalid",
@@ -363,8 +435,11 @@ def validate_calendar_scan(
 def validate_social_scan(
     *, text: str, platform: str = "", **kwargs: Any
 ) -> SocialScanIntent:
+    _reject_forbidden_scan_keys(kwargs, SOCIAL_SCAN_FORBIDDEN, where="social")
     try:
         return SocialScanIntent.from_scan(text=text, platform=platform, **kwargs)
+    except IntentValidationError:
+        raise
     except (ValidationError, TypeError, ValueError) as exc:
         raise IntentValidationError(
             "social scan intent invalid",
@@ -433,7 +508,7 @@ def map_error_code(
         return GOV_RATE_LIMIT
     if any(
         "latch" in r.lower() or "transistor_closed" in r.lower() or "haven2_closed" in r.lower()
-        for r in rs
+        for r in (rs + ns)
     ):
         return GOV_LATCH_CLOSED
     if any(r.startswith("intent_invalid") or "gov_intent_invalid" in r.lower() for r in rs):
@@ -500,6 +575,9 @@ __all__ = [
     "GOV_RATE_LIMIT",
     "GOV_INTERNAL",
     "IntentValidationError",
+    "MAIL_SCAN_FORBIDDEN",
+    "CALENDAR_SCAN_FORBIDDEN",
+    "SOCIAL_SCAN_FORBIDDEN",
     "GovernIntent",
     "MailScanIntent",
     "MailScanPayload",
