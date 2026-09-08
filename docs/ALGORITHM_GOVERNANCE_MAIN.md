@@ -40,3 +40,14 @@ Scan intents must **not** carry credentials. Keys such as `private_key`,
 
 See `src/governed_stack/AGENT_ALGORITHM.md` and `GovernedAlgorithm` in
 `src/governed_stack/algorithm.py`.
+
+## QUANTUM Audit (HAIS fused line)
+
+When `GovernedAlgorithm.check` / `check_sync` returns, Audit also includes:
+
+- `quantum` — structured HAIS snapshot (`x, S, tau, r_prime, cap, delta_r_prime, T1, T2, T3, I`)
+- `quantum_line` — fixed-width fused continuous string (150 chars; see encoding docs)
+
+Details: [QUANTUM_LINE.md](QUANTUM_LINE.md). Related charters:
+[GOVERNED_CONTROLLER_NN.md](GOVERNED_CONTROLLER_NN.md),
+[NVNP_CONJECTURES.md](NVNP_CONJECTURES.md) (conjectures only — **not** a P vs NP proof).

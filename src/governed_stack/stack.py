@@ -370,7 +370,9 @@ class GovernedStack:
                 "risk": float(hais_metrics["risk_metric"]),
                 "instability": float(hais_metrics["instability"]),
                 "S": float(hais_metrics["S"]),
+                "tau": float(hais_metrics["tau"]),
                 "r_prime": float(hais_metrics["r_prime"]),
+                "delta_r_prime": float(hais_metrics["delta_r_prime"]),
             },
             haven2=haven2_info,
             solver=solver,
@@ -443,7 +445,15 @@ class GovernedStack:
 
     @staticmethod
     def _empty_hais() -> Dict[str, Optional[float]]:
-        return {"cap": None, "risk": None, "instability": None}
+        return {
+            "cap": None,
+            "risk": None,
+            "instability": None,
+            "S": None,
+            "tau": None,
+            "r_prime": None,
+            "delta_r_prime": None,
+        }
 
     def _haven2_snapshot(self, step) -> Dict[str, Any]:
         if step is None:

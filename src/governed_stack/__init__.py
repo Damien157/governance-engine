@@ -53,6 +53,14 @@ from .key_providers import (
 from .mail import GovernedMail, SendBlocked, intent_for_scan
 from .observability import DecisionMetrics, structured_log
 from .runtime_bridge import GovernedDecisionEngine
+from .quantum_line import (
+    attach_quantum,
+    build_quantum_state,
+    decode_quantum_line,
+    encode_quantum_line,
+    quantum_from_hais_envelope,
+)
+
 from .sidecar import (
     RateLimiter,
     SidecarService,
@@ -74,6 +82,11 @@ __all__ = [
     "GovernedCalendar",
     "GovernedPost",
     "GovernedAlgorithm",
+    "attach_quantum",
+    "build_quantum_state",
+    "encode_quantum_line",
+    "decode_quantum_line",
+    "quantum_from_hais_envelope",
     "GovernedOutboundText",
     "HavenUnified",
     "GovernedUnified",

@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional, Union
 
 from .contracts import validate_algorithm_scan
 from .mail import SendBlocked
+from .quantum_line import attach_quantum
 from .stack import GovernedStack, ensure_import_paths
 
 ensure_import_paths()
@@ -145,7 +146,7 @@ class GovernedAlgorithm:
             "notes": risk_notes or "",
             "security_margin": security_margin,
         }
-        return {
+        result = {
             "ok": ok,
             "decision": decision,
             "reasons": env.get("reasons"),
@@ -158,6 +159,8 @@ class GovernedAlgorithm:
             "risk": risk_summary,
             "blocked_run": not ok,
         }
+        # QUANTUM audit snapshot from HAIS envelope (Algorithm Audit axis).
+        return attach_quantum(result)
 
     async def require_allow(
         self,
