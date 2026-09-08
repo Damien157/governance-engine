@@ -146,6 +146,60 @@ $\mathrm{cap}_t = \exp(-2.2\, r'_t)$ from HAIS.
 
 ---
 
+## DNA → Membrane → Neural prune → Superposition → Collapse
+
+Operational pipeline for imprint **3DM** (classical NP-style witness search).
+This is the concrete “N V NP” *process* shape — **not** a complexity-class proof.
+
+| Stage | Meaning | Imprint / stack piece | Status |
+|-------|---------|----------------------|--------|
+| **DNA** | Encode candidate matchings as codon strings; clash motif (`TTTT`) flags non-disjoint reuse | `imprint.dna.DNACodec`, pool \(D\) | **Implemented** (Phase 0 sim) |
+| **Membrane** | Sequence-level / certificate prune: motif scan removes invalid encodings from effective support; membrane certificates must not silently resurrect | Motif filter + Irreversibility conjecture | **Partial** — instance-local filter **Implemented**; global membrane registry **Hypothesis** |
+| **Neural prune** | Soft / neural scores down-weight (or threshold) weak candidates; **never** admit without hard \(V\) | `SoftVerifier`, optional logistic mix | **Implemented** soft scores; aggressive certified neural prune thresholds **Hypothesis** / training-time |
+| **Superposition** | Weighted classical amplitudes over remaining \(S\) (not qubits) | `SuperpositionSampler` weights \(w=\alpha s+\beta F+\gamma g\) | **Implemented** sketch (classical) |
+| **Collapse** | Draw a witness candidate; hard gate decides membership in \(L\) | `SuperpositionSampler.collapse` + hard \(V\) | **Implemented** on ALLOW-gated `action=3dm` path only as solver sketch |
+
+Tie-in: run under Algorithm Purpose→Cost→Risk→Authority→Audit before any
+deploy; latch closed → `GOV_LATCH_CLOSED` for `control`/`3dm`.
+
+### 3DM decision pseudocode (classical witness pipeline)
+
+```
+# Instance: sets X,Y,Z and triples T; seek matching of size k (disjoint cover).
+S = generate_k_subsets(T, k)          # enumerate candidate matchings
+for M in S:
+    # Membrane / DNA prune (optional early reject)
+    if has_clash_motif(encode_DNA(M)):
+        eliminate(M); continue
+    # Neural / soft prune — score only; does NOT certify YES
+    if neural_score(M) < tau:
+        eliminate_or_downweight(M); continue
+# Superposition: build weights over surviving candidates
+W = superposition_weights(survivors)
+# Collapse: sample a witness candidate
+M* = sample_witness(W)                # classical weighted draw
+# Hard matching check — NP verifier
+if hard_matching_check(M*, k):        # V(M*) == 1  →  M* ∈ L
+    return YES with witness M*
+else:
+    return NO_or_continue_search
+```
+
+Honest labels:
+
+- `generate_k_subsets` / hard \(V\) / imprint enumerator: **Implemented** for
+  small enumerable instances (Phase 0).
+- `neural_score ≥ tau` as a *sound* prune certificate: **Hypothesis** unless
+  paired with a checkable membrane witness (soft scores alone are not proofs).
+- `sample_witness`: **Implemented** as weighted classical collapse — **not**
+  quantum sampling.
+
+Reaffirm: this remains a **classical NP-style witness pipeline** (guess +
+poly-time hard check). It does **not** show \(\mathrm{P}=\mathrm{NP}\) or
+\(\mathrm{P}\neq\mathrm{NP}\).
+
+Out-of-band analytic sketch (unrelated to 3DM ALLOW): [ANALYTIC_ZERO_SUITE.md](ANALYTIC_ZERO_SUITE.md).
+
 ## Relation to Algorithm Governance Main
 
 | Axis | How conjectures touch it |
@@ -156,7 +210,8 @@ $\mathrm{cap}_t = \exp(-2.2\, r'_t)$ from HAIS.
 | **Authority** | Only token/role may revoke membrane certificates |
 | **Audit** | QUANTUM line + `entry_id` witness the step |
 
-See also: [QUANTUM_LINE.md](QUANTUM_LINE.md), [GOVERNED_CONTROLLER_NN.md](GOVERNED_CONTROLLER_NN.md).
+See also: [QUANTUM_LINE.md](QUANTUM_LINE.md), [GOVERNED_CONTROLLER_NN.md](GOVERNED_CONTROLLER_NN.md),
+[ATOM_SAFEGUARD_II.md](ATOM_SAFEGUARD_II.md). Out-of-band: [ANALYTIC_ZERO_SUITE.md](ANALYTIC_ZERO_SUITE.md).
 
 ---
 
@@ -166,3 +221,5 @@ See also: [QUANTUM_LINE.md](QUANTUM_LINE.md), [GOVERNED_CONTROLLER_NN.md](GOVERN
 - Imprint “superposition” is a **weighted classical draw**.
 - Haven2 “transistor” is a **discrete latch** on energy residual.
 - QUANTUM line is a **fused audit encoding**, not qubits.
+- DNA→…→Collapse is a **classical** imprint 3DM witness pipeline, not a P vs NP proof.
+- AnalyticZeroSuite is **out-of-band** research vocabulary — not a Riemann proof.
