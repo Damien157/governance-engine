@@ -12,6 +12,7 @@ import importlib
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .algorithm import GovernedAlgorithm
 from .calendar import GovernedCalendar
 from .catalog import TIERS, catalog_snapshot, describe
 from .mail import GovernedMail
@@ -27,7 +28,7 @@ class HavenUnified:
     Single front door:
 
       .govern / .control_step / .demo_3dm  → live GovernedStack
-      .mail / .calendar / .post            → adapters sharing the same stack
+      .mail / .calendar / .post / .algorithm → adapters sharing the same stack
       sketch helpers                       → importable demos, not on decision path
     """
 
@@ -37,6 +38,7 @@ class HavenUnified:
         self._mail: Optional[GovernedMail] = None
         self._calendar: Optional[GovernedCalendar] = None
         self._post: Optional[GovernedPost] = None
+        self._algorithm: Optional[GovernedAlgorithm] = None
         self._runtime: Optional[GovernedDecisionEngine] = None
 
     # ------------------------------------------------------------------
@@ -65,6 +67,12 @@ class HavenUnified:
     @property
     def social(self) -> GovernedPost:
         return self.post
+
+    @property
+    def algorithm(self) -> GovernedAlgorithm:
+        if self._algorithm is None:
+            self._algorithm = GovernedAlgorithm(stack=self.stack)
+        return self._algorithm
 
     @property
     def runtime(self) -> GovernedDecisionEngine:

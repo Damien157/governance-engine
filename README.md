@@ -8,7 +8,7 @@ A **governed request stack** that composes Damien O’Driscoll’s existing pack
 
 **Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (action bus → connectors → CI → tool/agent → tenancy/KMS).
 
-**Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social adapters.
+**Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social/algorithm adapters.
 
 This is **not** a P vs NP proof, a theory of everything, AGI, a formal certificate authority product, or a quantum / DNA computer. Imprint’s “superposition” is a weighted classical draw over matchings; Haven2’s “transistor” is a discrete latch on energy residual; HAIS caps capability from telemetry.
 
@@ -21,6 +21,7 @@ This is **not** a P vs NP proof, a theory of everything, AGI, a formal certifica
 | **live** | `GovernedMail` | `src/governed_stack/mail.py` | **Yes** — outbound mail gate |
 | **live** | `GovernedCalendar` | `src/governed_stack/calendar.py` | **Yes** — calendar write gate |
 | **live** | `GovernedPost` | `src/governed_stack/social.py` | **Yes** — outbound social/post gate |
+| **live** | `GovernedAlgorithm` | `src/governed_stack/algorithm.py` | **Yes** — algorithm run/deploy gate (Purpose→Cost→Risk) |
 | **live** | `HavenUnified` | `src/governed_stack/unified.py` | **Yes** — thin facade |
 | **live** | `GovernedDecisionEngine` | `src/governed_stack/runtime_bridge.py` | **Yes** — decide adapter (constitution/halt → govern) |
 | **core** | `ZKEnhancedGovernanceEngine` (unified v1.1) | `certified_governance_unified.py` | Yes (preferred ops layer; `crypto=`) |
@@ -105,7 +106,22 @@ pip install -e ".[dev]"            # optional; PYTHONPATH also works
 
 **Never call social publish/create_post until `GovernedPost.check` returns ALLOW.** Prefer `require_allow` / `HavenUnified().post`. Agent rules: `src/governed_stack/AGENT_SOCIAL.md`.
 
+## Algorithm run / deploy gate
 
+`GovernedAlgorithm` puts `GovernedStack.govern()` in front of algorithm run/deploy without ever executing. Scans Purpose (purpose/summary), Cost (time/space/energy/speedup), and Risk (notes/security_margin) — **BLOCK means do not run or deploy**. Speedup is a Cost claim; security lives under Risk; energy is a Cost estimate. **Not** a P vs NP proof. Charter: [`docs/ALGORITHM_GOVERNANCE_MAIN.md`](docs/ALGORITHM_GOVERNANCE_MAIN.md).
+
+```python
+from governed_stack import GovernedAlgorithm
+r = GovernedAlgorithm().check_sync(
+    purpose="batch_dedupe",
+    summary="Nightly anonymized id dedupe",
+    time_cost="O(n log n)",
+    energy_cost="low",
+    risk_notes="read-only replica",
+)
+```
+
+**Never run/deploy an algorithm until `GovernedAlgorithm.check` returns ALLOW.** Prefer `require_allow` / `HavenUnified().algorithm`. Agent rules: `src/governed_stack/AGENT_ALGORITHM.md`.
 
 ## Governed action bus (no bypass)
 
@@ -291,7 +307,7 @@ CI (`.github/workflows/ci.yml`, Python 3.12/3.13): `pip install -e ".[dev]"`, th
 
 ```
 governance-engine/
-  src/governed_stack/     # HavenUnified + GovernedStack + mail/calendar/social + contracts + runtime_bridge + catalog
+  src/governed_stack/     # HavenUnified + GovernedStack + mail/calendar/social/algorithm + contracts + runtime_bridge + catalog
   certified_governance_unified.py  # preferred ops (v1.1)
   src/governance_engine/  # CLF-CBF-QP (live control)
   hais/                   # CGE + ZK + SovereignKernel (+ production pipeline sketch)

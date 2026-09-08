@@ -8,7 +8,7 @@ Validation choice (documented):
   IntentValidationError for unit tests and adapter builders.
 
 Sketches must not import this module for solvers; contracts are live-gate only.
-To/Cc/attendees/start/end/handles/URLs are forbidden on scan intents (scan_intent_forbids:* → GOV_INTENT_INVALID); silent drop is not allowed.
+To/Cc/attendees/start/end/handles/URLs and algorithm secret keys (private_key/password/token/secret) are forbidden on scan intents (scan_intent_forbids:* → GOV_INTENT_INVALID); silent drop is not allowed.
 """
 
 from __future__ import annotations
@@ -65,6 +65,7 @@ class IntentValidationError(ValueError):
 MAIL_SCAN_FORBIDDEN = frozenset({"to", "cc", "bcc", "from"})
 CALENDAR_SCAN_FORBIDDEN = frozenset({"attendees", "start", "end"})
 SOCIAL_SCAN_FORBIDDEN = frozenset({"handles", "urls", "recipients"})
+ALGORITHM_SCAN_FORBIDDEN = frozenset({"private_key", "password", "token", "secret"})
 
 
 def _reject_forbidden_scan_keys(
@@ -284,6 +285,146 @@ class SocialScanIntent(GovernIntent):
         return data
 
 
+
+
+class AlgorithmScanPayload(BaseModel):
+    """Scanned algorithm fields — purpose/cost/risk summary; no secrets."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    subject: str = ""
+    text: str = ""
+
+
+class AlgorithmScanIntent(GovernIntent):
+    """Algorithm run/deploy scan: Purpose + Cost + Risk; secrets forbidden."""
+
+    action: str = "run_algorithm"
+    purpose: str = ""
+    summary: str = ""
+    time_cost: Optional[Union[str, int, float]] = None
+    space_cost: Optional[Union[str, int, float]] = None
+    energy_cost: Optional[Union[str, int, float]] = None
+    speedup: Optional[Union[str, int, float]] = None
+    risk_notes: str = ""
+    security_margin: Optional[Union[str, int, float]] = None
+    payload: Optional[AlgorithmScanPayload] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_secret_fields(cls, data: Any) -> Any:
+        _reject_forbidden_scan_keys(data, ALGORITHM_SCAN_FORBIDDEN, where="algorithm")
+        return data
+
+    @staticmethod
+    def _fmt_cost(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    @classmethod
+    def _compose_scan_text(
+        cls,
+        *,
+        summary: str,
+        time_cost: Any,
+        space_cost: Any,
+        energy_cost: Any,
+        speedup: Any,
+        risk_notes: str,
+        security_margin: Any,
+    ) -> str:
+        parts: List[str] = []
+        if summary:
+            parts.append(summary)
+        cost_bits = []
+        for label, val in (
+            ("time", time_cost),
+            ("space", space_cost),
+            ("energy", energy_cost),
+            ("speedup", speedup),
+        ):
+            rendered = cls._fmt_cost(val)
+            if rendered:
+                cost_bits.append(f"{label}={rendered}")
+        if cost_bits:
+            parts.append("cost: " + "; ".join(cost_bits))
+        if risk_notes:
+            parts.append(f"risk: {risk_notes}")
+        margin = cls._fmt_cost(security_margin)
+        if margin:
+            parts.append(f"security_margin={margin}")
+        return "\n".join(parts)
+
+    @classmethod
+    def from_scan(
+        cls,
+        *,
+        purpose: str,
+        summary: str = "",
+        time_cost: Optional[Union[str, int, float]] = None,
+        space_cost: Optional[Union[str, int, float]] = None,
+        energy_cost: Optional[Union[str, int, float]] = None,
+        speedup: Optional[Union[str, int, float]] = None,
+        risk_notes: str = "",
+        security_margin: Optional[Union[str, int, float]] = None,
+        **kwargs: Any,
+    ) -> "AlgorithmScanIntent":
+        text = cls._compose_scan_text(
+            summary=summary,
+            time_cost=time_cost,
+            space_cost=space_cost,
+            energy_cost=energy_cost,
+            speedup=speedup,
+            risk_notes=risk_notes,
+            security_margin=security_margin,
+        )
+        return cls(
+            action="run_algorithm",
+            purpose=purpose,
+            summary=summary,
+            time_cost=time_cost,
+            space_cost=space_cost,
+            energy_cost=energy_cost,
+            speedup=speedup,
+            risk_notes=risk_notes or "",
+            security_margin=security_margin,
+            payload=AlgorithmScanPayload(subject=purpose, text=text),
+            **kwargs,
+        )
+
+    def dump_for_govern(self) -> Dict[str, Any]:
+        purpose = self.purpose
+        text = self._compose_scan_text(
+            summary=self.summary,
+            time_cost=self.time_cost,
+            space_cost=self.space_cost,
+            energy_cost=self.energy_cost,
+            speedup=self.speedup,
+            risk_notes=self.risk_notes,
+            security_margin=self.security_margin,
+        )
+        if self.payload is not None:
+            purpose = self.payload.subject or purpose
+            text = self.payload.text if self.payload.text else text
+        data = self.model_dump(
+            mode="python",
+            exclude_none=True,
+            exclude={
+                "purpose",
+                "summary",
+                "time_cost",
+                "space_cost",
+                "energy_cost",
+                "speedup",
+                "risk_notes",
+                "security_margin",
+            },
+        )
+        data["action"] = "run_algorithm"
+        data["payload"] = {"subject": purpose, "text": text}
+        return data
+
 class DecisionEnvelope(BaseModel):
     """Typed view of a govern() result (optional fields for additive envelopes)."""
 
@@ -309,6 +450,7 @@ _CHANNEL_ACTIONS = {
     "send_email": MailScanIntent,
     "calendar_write": CalendarScanIntent,
     "publish_post": SocialScanIntent,
+    "run_algorithm": AlgorithmScanIntent,
 }
 
 
@@ -377,6 +519,37 @@ def parse_intent(raw: dict) -> GovernIntent:
                     },
                 )
             return SocialScanIntent.model_validate(raw)
+        if model_cls is AlgorithmScanIntent:
+            _reject_forbidden_scan_keys(raw, ALGORITHM_SCAN_FORBIDDEN, where="algorithm")
+            if ("purpose" in raw or "summary" in raw) and "payload" not in raw:
+                return AlgorithmScanIntent.from_scan(
+                    purpose=str(raw.get("purpose", "")),
+                    summary=str(raw.get("summary", "")),
+                    time_cost=raw.get("time_cost"),
+                    space_cost=raw.get("space_cost"),
+                    energy_cost=raw.get("energy_cost"),
+                    speedup=raw.get("speedup"),
+                    risk_notes=str(raw.get("risk_notes", "")),
+                    security_margin=raw.get("security_margin"),
+                    **{
+                        k: v
+                        for k, v in raw.items()
+                        if k
+                        not in (
+                            "purpose",
+                            "summary",
+                            "time_cost",
+                            "space_cost",
+                            "energy_cost",
+                            "speedup",
+                            "risk_notes",
+                            "security_margin",
+                            "action",
+                            "payload",
+                        )
+                    },
+                )
+            return AlgorithmScanIntent.model_validate(raw)
         return GovernIntent.model_validate(raw)
     except IntentValidationError:
         raise
@@ -447,9 +620,43 @@ def validate_social_scan(
         ) from exc
 
 
+def validate_algorithm_scan(
+    *,
+    purpose: str,
+    summary: str = "",
+    time_cost: Optional[Union[str, int, float]] = None,
+    space_cost: Optional[Union[str, int, float]] = None,
+    energy_cost: Optional[Union[str, int, float]] = None,
+    speedup: Optional[Union[str, int, float]] = None,
+    risk_notes: str = "",
+    security_margin: Optional[Union[str, int, float]] = None,
+    **kwargs: Any,
+) -> AlgorithmScanIntent:
+    _reject_forbidden_scan_keys(kwargs, ALGORITHM_SCAN_FORBIDDEN, where="algorithm")
+    try:
+        return AlgorithmScanIntent.from_scan(
+            purpose=purpose,
+            summary=summary,
+            time_cost=time_cost,
+            space_cost=space_cost,
+            energy_cost=energy_cost,
+            speedup=speedup,
+            risk_notes=risk_notes,
+            security_margin=security_margin,
+            **kwargs,
+        )
+    except IntentValidationError:
+        raise
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise IntentValidationError(
+            "algorithm scan intent invalid",
+            errors=[{"msg": str(exc)}],
+        ) from exc
+
+
 def intent_to_govern_dict(intent: Union[GovernIntent, dict, BaseModel]) -> Dict[str, Any]:
     """Normalize BaseModel / channel intent / dict to a govern() dict."""
-    if isinstance(intent, (MailScanIntent, CalendarScanIntent, SocialScanIntent)):
+    if isinstance(intent, (MailScanIntent, CalendarScanIntent, SocialScanIntent, AlgorithmScanIntent)):
         return intent.dump_for_govern()
     if isinstance(intent, GovernIntent):
         return intent.model_dump(mode="python", exclude_none=True)
@@ -578,6 +785,7 @@ __all__ = [
     "MAIL_SCAN_FORBIDDEN",
     "CALENDAR_SCAN_FORBIDDEN",
     "SOCIAL_SCAN_FORBIDDEN",
+    "ALGORITHM_SCAN_FORBIDDEN",
     "GovernIntent",
     "MailScanIntent",
     "MailScanPayload",
@@ -585,11 +793,14 @@ __all__ = [
     "CalendarScanPayload",
     "SocialScanIntent",
     "SocialScanPayload",
+    "AlgorithmScanIntent",
+    "AlgorithmScanPayload",
     "DecisionEnvelope",
     "parse_intent",
     "validate_mail_scan",
     "validate_calendar_scan",
     "validate_social_scan",
+    "validate_algorithm_scan",
     "intent_to_govern_dict",
     "normalize_envelope",
     "map_error_code",

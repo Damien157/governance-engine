@@ -15,6 +15,8 @@ from .action_bus import (
     ActionDenied,
     GovernedActionBus,
 )
+from .algorithm import AlgorithmBlocked, GovernedAlgorithm
+from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .calendar import CalendarBlocked, GovernedCalendar
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .catalog import TIERS, catalog_snapshot, describe, import_check, live_ok
@@ -27,6 +29,7 @@ from .contracts import (
     GOV_POLICY_BLOCK,
     GOV_POLICY_REVIEW,
     GOV_RATE_LIMIT,
+    AlgorithmScanIntent,
     CalendarScanIntent,
     DecisionEnvelope,
     ErrorCode,
@@ -35,6 +38,7 @@ from .contracts import (
     MailScanIntent,
     SocialScanIntent,
     parse_intent,
+    validate_algorithm_scan,
     validate_calendar_scan,
     validate_mail_scan,
     validate_social_scan,
@@ -69,6 +73,7 @@ __all__ = [
     "GovernedMail",
     "GovernedCalendar",
     "GovernedPost",
+    "GovernedAlgorithm",
     "GovernedOutboundText",
     "HavenUnified",
     "GovernedUnified",
@@ -77,12 +82,14 @@ __all__ = [
     "ActionDenied",
     "CalendarBlocked",
     "PostBlocked",
+    "AlgorithmBlocked",
     "CHANNELS",
     "PUBLIC_EXECUTE_HELPERS",
     "ensure_import_paths",
     "intent_for_scan",
     "calendar_intent_for_scan",
     "social_intent_for_scan",
+    "algorithm_intent_for_scan",
     "TIERS",
     "describe",
     "import_check",
@@ -109,11 +116,13 @@ __all__ = [
     "MailScanIntent",
     "CalendarScanIntent",
     "SocialScanIntent",
+    "AlgorithmScanIntent",
     "DecisionEnvelope",
     "parse_intent",
     "validate_mail_scan",
     "validate_calendar_scan",
     "validate_social_scan",
+    "validate_algorithm_scan",
     "RateLimiter",
     "TenantRegistry",
     "TenantSpec",
