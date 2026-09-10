@@ -11,3 +11,5 @@ Do **not** silently pretend full spectrum availability or drop zeta errors.
 | **FIX 4** | `stack.py` silently `except: pass` on `zeta_summaries()`. | On Exception set `haven2_info["zeta_error"]` and append `haven2_zeta_summaries_error:…` to notes. Decision unchanged; spectrum may fall through. |
 
 Related: [SPECTRAL_AUDIT.md](SPECTRAL_AUDIT.md), module `governed_stack.spectral_audit`.
+
+Repeatable exercises (FIX 1–4, not happy-path curl): `scripts/spectral_fix_exercises.py`.

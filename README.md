@@ -301,7 +301,7 @@ bash scripts/ci_local.sh
 .venv/bin/python -m pytest tests/test_lie_and_constraints.py tests/test_safety_sim.py -v
 ```
 
-CI (`.github/workflows/ci.yml`, Python 3.12/3.13): `pip install -e ".[dev]"`, then **`ruff check src/governed_stack`**, **`mypy src/governed_stack`**, then `python scripts/run_all_works_tests.py`. Local mirror: `bash scripts/ci_local.sh` (same order). Prefer `scripts/test_harness.py` locally when hunting maths / sketch bugs. Remote Origin vs GitHub hosting / Actions push is a parallel track.
+CI (`.github/workflows/ci.yml`, Python 3.12/3.13): `pip install -e ".[dev]"`, then **`ruff check src/governed_stack`**, **`mypy src/governed_stack`**, then `python scripts/run_all_works_tests.py`. Local mirror: `bash scripts/ci_local.sh` (same order). Prefer `scripts/test_harness.py` locally when hunting maths / sketch bugs. Spectral honesty FIX 1–4: `.venv/bin/python scripts/spectral_fix_exercises.py`. Remote Origin vs GitHub hosting / Actions push is a parallel track.
 
 ## Layout
 
