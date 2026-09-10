@@ -50,3 +50,4 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 | Lazy tenant build under `REQUIRE=1` | Eager-build / preflight all tenants at serve start so `/ready` fail-fast matches runtime. |
 
 Full map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
+
