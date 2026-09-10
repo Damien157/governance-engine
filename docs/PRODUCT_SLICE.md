@@ -31,6 +31,39 @@ A typical `GovernedAlgorithm.check` / `check_sync` result includes:
   nulls + reason
 - **haven2** — realm / residual / latch open flag from the live step
 
+## Hosted check API (HTTP sidecar)
+
+Check-only — no remote execute. Stdlib ``http.server`` sidecar (``governed_stack.sidecar``).
+
+Issue a JWT with the same signing key as the sidecar:
+
+```bash
+python - <<'PY'
+from governed_stack.sidecar import SidecarService
+svc = SidecarService()
+print(svc.issue_token("customer", "operator"))
+PY
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/check \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "channel": "algorithm",
+    "token": "<JWT>",
+    "purpose": "batch_dedupe",
+    "summary": "Nightly anonymized id dedupe",
+    "time_cost": "O(n log n)",
+    "space_cost": "O(n)",
+    "energy_cost": "low",
+    "speedup": "~2x",
+    "risk_notes": "read-only replica",
+    "security_margin": "standard"
+  }'
+```
+
+Algorithm responses include ``decision`` / ``ok`` / ``reasons`` / ``entry_id`` plus QUANTUM (``quantum``, ``quantum_line``) and ``spectrum`` when available. See [HOSTED_CHECK_API.md](HOSTED_CHECK_API.md) and [CUSTOMER_OPS.md](CUSTOMER_OPS.md).
+
 ## Soft block vs hard
 
 - **Hard gate (live):** non-ALLOW means do not run, send, post, or write.

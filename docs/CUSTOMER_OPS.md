@@ -76,9 +76,14 @@ Channels:
 | `mail`    | `subject`, `body` (or `text`)      | To / Cc / From                   |
 | `calendar`| `summary`, `description`, `location` | attendees / start / end        |
 | `social`  | `text` (optional `platform`)       | recipients / URLs / handles      |
+| `algorithm` | `purpose` (required), optional `summary`, `time_cost`, `space_cost`, `energy_cost`, `speedup`, `risk_notes`, `security_margin` | `private_key` / `password` / `secret` (scan-level `token` forbidden; auth JWT is a separate body field) |
 | `raw`     | `intent` dict (contracts-validated)| —                                |
 
-Response JSON: `decision`, `reasons`, `error_code`, `latency_ms`, `entry_id` when present, and `tenant_id` when multi-tenant auth resolved a tenant.
+**JWT token:** every `/v1/check` body must include `token` (stack-issued JWT). Issue one from the same signing key via `SidecarService.issue_token(user, role)` (or `GovernedStack.issue_token`) — e.g. a short Python one-liner against a running config. Do not put secrets into the algorithm scan fields.
+
+Response JSON (mail/calendar/social/raw, slim): `decision`, `reasons`, `error_code`, `latency_ms`, `entry_id` when present, and `tenant_id` when multi-tenant auth resolved a tenant.
+
+Algorithm channel (enriched): also `ok`, slim `hais`, slim `haven2` (`realm` / `open` / `p_hat` + `zeta_error` if any), `quantum`, `quantum_line`, `spectrum`.
 
 Optional: `POST /v1/review/list` lists pending REVIEW rows (same engine as CLI). Prefer CLI for approve/deny.
 

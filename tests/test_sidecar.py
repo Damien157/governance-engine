@@ -194,6 +194,82 @@ class TestSidecarHTTP(unittest.TestCase):
         self.assertEqual(body.get("decision"), "BLOCK")
         self.assertEqual(body.get("error_code"), "GOV_INTENT_INVALID")
 
+    def test_check_allow_algorithm_with_quantum_spectrum(self):
+        token = self.service.issue_token("tester", "operator")
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={
+                "channel": "algorithm",
+                "token": token,
+                "purpose": "batch_dedupe",
+                "summary": "Nightly anonymized id dedupe",
+                "time_cost": "O(n log n)",
+                "space_cost": "O(n)",
+                "energy_cost": "low",
+                "speedup": "~2x",
+                "risk_notes": "read-only replica",
+                "security_margin": "standard",
+            },
+        )
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("decision"), "ALLOW")
+        self.assertTrue(body.get("ok"))
+        self.assertIn("latency_ms", body)
+        self.assertIn("entry_id", body)
+        self.assertIn("hais", body)
+        self.assertIn("haven2", body)
+        haven2 = body.get("haven2") or {}
+        self.assertIn("realm", haven2)
+        self.assertIn("open", haven2)
+        self.assertIn("p_hat", haven2)
+        self.assertIn("quantum", body)
+        self.assertIn("quantum_line", body)
+        self.assertIsInstance(body.get("quantum_line"), str)
+        self.assertGreater(len(body["quantum_line"]), 0)
+        self.assertIn("spectrum", body)
+        spec = body["spectrum"]
+        self.assertIsInstance(spec, dict)
+        self.assertIn("available", spec)
+
+    def test_check_unknown_channel_blocks(self):
+        token = self.service.issue_token("tester", "operator")
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={
+                "channel": "fax",
+                "token": token,
+                "purpose": "nope",
+            },
+        )
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("decision"), "BLOCK")
+        self.assertEqual(body.get("error_code"), "GOV_INTENT_INVALID")
+        reasons = body.get("reasons") or []
+        self.assertTrue(any("unknown channel" in str(r) for r in reasons))
+
+    def test_check_algorithm_rejects_secret_keys(self):
+        token = self.service.issue_token("tester", "operator")
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={
+                "channel": "algorithm",
+                "token": token,
+                "purpose": "batch_dedupe",
+                "password": "should-not-be-here",
+            },
+        )
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("decision"), "BLOCK")
+        self.assertEqual(body.get("error_code"), "GOV_INTENT_INVALID")
+        reasons = body.get("reasons") or []
+        self.assertTrue(any("scan_intent_forbids:password" in str(r) for r in reasons))
+
 
 class TestSidecarApiKey(unittest.TestCase):
     """Separate server with GOVERNANCE_API_KEY required on /v1/*."""

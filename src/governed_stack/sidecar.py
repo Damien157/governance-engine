@@ -1,8 +1,8 @@
 """Customer-operable HTTP sidecar over the live govern gate (check-only).
 
 Stdlib ``http.server`` only — no FastAPI / heavy web deps.
-Never sends mail/calendar/social; ``POST /v1/check`` runs govern/adapters
-in check mode only. Sketches stay off this path.
+Never sends mail/calendar/social/algorithm; ``POST /v1/check`` runs govern/adapters
+in check mode only (algorithm includes QUANTUM + spectrum audit fields). Sketches stay off this path.
 
 There is intentionally **no** ``POST /v1/execute``: remote arbitrary side
 effects are unsafe. Mutations go through in-process ``GovernedActionBus``
@@ -27,10 +27,19 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
+from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .calendar import intent_for_scan as calendar_intent_for_scan
-from .contracts import GOV_RATE_LIMIT
+from .contracts import (
+    ALGORITHM_SCAN_FORBIDDEN,
+    GOV_INTENT_INVALID,
+    GOV_RATE_LIMIT,
+    IntentValidationError,
+    _reject_forbidden_scan_keys,
+)
 from .mail import intent_for_scan as mail_intent_for_scan
+from .quantum_line import attach_quantum
 from .social import intent_for_scan as social_intent_for_scan
+from .spectral_audit import attach_spectrum
 from .stack import GovernedStack, ensure_import_paths
 
 ensure_import_paths()
@@ -509,6 +518,50 @@ class SidecarService:
                 text=str(body.get("text") or body.get("body") or ""),
                 platform=str(body.get("platform") or ""),
             )
+        elif channel == "algorithm":
+            # Auth JWT stays in body["token"]; scan must not smuggle secrets.
+            # Exclude channel + JWT from the forbidden-key view (JWT is not a
+            # scan secret — ALGORITHM_SCAN_FORBIDDEN includes "token").
+            scan_view = {
+                k: v for k, v in body.items() if k not in ("channel", "token")
+            }
+            try:
+                _reject_forbidden_scan_keys(
+                    scan_view, ALGORITHM_SCAN_FORBIDDEN, where="algorithm"
+                )
+                purpose = body.get("purpose")
+                if not isinstance(purpose, str) or not purpose.strip():
+                    raise IntentValidationError(
+                        "algorithm purpose required",
+                        errors=[{
+                            "loc": ["algorithm", "purpose"],
+                            "msg": "purpose required",
+                            "type": "missing",
+                        }],
+                    )
+                intent = algorithm_intent_for_scan(
+                    purpose=purpose.strip(),
+                    summary=str(body.get("summary") or ""),
+                    time_cost=body.get("time_cost"),
+                    space_cost=body.get("space_cost"),
+                    energy_cost=body.get("energy_cost"),
+                    speedup=body.get("speedup"),
+                    risk_notes=str(body.get("risk_notes") or ""),
+                    security_margin=body.get("security_margin"),
+                )
+            except IntentValidationError as exc:
+                return {
+                    "decision": "BLOCK",
+                    "ok": False,
+                    "reasons": [str(exc)],
+                    "error_code": getattr(exc, "code", None) or GOV_INTENT_INVALID,
+                    "latency_ms": 0.0,
+                    "entry_id": None,
+                }
+            env = await self.stack.govern(intent, token)
+            # Same QUANTUM + spectrum attach path as GovernedAlgorithm.check
+            # (FIX 1–4 honesty preserved via attach_spectrum).
+            return self._algorithm_envelope(env)
         elif channel == "raw":
             raw_intent = body.get("intent")
             if raw_intent is None and isinstance(body.get("action"), str):
@@ -539,6 +592,7 @@ class SidecarService:
 
     @staticmethod
     def _slim_envelope(env: Dict[str, Any]) -> Dict[str, Any]:
+        """Slim response for mail/calendar/social/raw — additive-safe for old clients."""
         out: Dict[str, Any] = {
             "decision": env.get("decision", "BLOCK"),
             "reasons": env.get("reasons"),
@@ -548,6 +602,46 @@ class SidecarService:
         if env.get("entry_id") is not None:
             out["entry_id"] = env.get("entry_id")
         return out
+
+    @staticmethod
+    def _slim_hais(hais: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(hais, dict):
+            return None
+        keys = ("cap", "risk", "instability", "S", "r_prime", "delta_r_prime")
+        return {k: hais[k] for k in keys if k in hais}
+
+    @staticmethod
+    def _slim_haven2(haven2: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(haven2, dict):
+            return None
+        out: Dict[str, Any] = {}
+        for k in ("realm", "open", "p_hat"):
+            if k in haven2:
+                out[k] = haven2[k]
+        if "zeta_error" in haven2:
+            out["zeta_error"] = haven2["zeta_error"]
+        return out
+
+    def _algorithm_envelope(self, env: Dict[str, Any]) -> Dict[str, Any]:
+        """Buyer-facing algorithm check response (QUANTUM + spectrum)."""
+        decision = env.get("decision", "BLOCK")
+        out: Dict[str, Any] = {
+            "decision": decision,
+            "ok": decision == "ALLOW",
+            "reasons": env.get("reasons"),
+            "entry_id": env.get("entry_id"),
+            "error_code": env.get("error_code"),
+            "latency_ms": env.get("latency_ms"),
+            "hais": self._slim_hais(env.get("hais")),
+            "haven2": self._slim_haven2(env.get("haven2")),
+        }
+        # attach_quantum reads result["hais"]; spectrum uses full env + engine.
+        attach_quantum(out)
+        return attach_spectrum(
+            out,
+            env,
+            engine=getattr(self.stack, "haven2", None),
+        )
 
     def list_pending_reviews(self, limit: int = 50) -> List[Dict[str, Any]]:
         eng = getattr(self.stack, "engine", None)
