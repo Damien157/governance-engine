@@ -685,7 +685,151 @@ class TestSidecarRateLimitHTTP(unittest.TestCase):
         self.assertEqual(hcode, 200)
 
 
+
+class TestMultiTenantRequirePersistedKey(unittest.TestCase):
+    """Failure path: REQUIRE=1 must not fall back to the shared default PEM."""
+
+    def test_missing_per_tenant_pem_refuses_shared_default(self):
+        old = {k: os.environ.pop(k, None) for k in _MT_ENV}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                shared = str(Path(td) / "shared_default.pem")
+                # Shared default EXISTS — the bug was falling back to it.
+                CryptoEngine(private_key_path=shared)
+                tenants_root = Path(td) / "tenants"
+                tenants_root.mkdir()
+                # t_bad has no per-tenant PEM; t_ok has its own.
+                ok_pem = str(tenants_root / "t_ok" / "signing_key.pem")
+                Path(ok_pem).parent.mkdir(parents=True)
+                CryptoEngine(private_key_path=ok_pem)
+                os.environ["GOVERNANCE_TENANTS_JSON"] = json.dumps(
+                    {
+                        "t_ok": {
+                            "api_key": "ok-secret",
+                            "db_path": str(Path(td) / "t_ok" / "audit.db"),
+                            # omit signing_key_path → should use per-tenant file
+                        },
+                        "t_bad": {
+                            "api_key": "bad-secret",
+                            "db_path": str(Path(td) / "t_bad" / "audit.db"),
+                            # no signing_key_path, no tenants/t_bad/signing_key.pem
+                        },
+                    }
+                )
+                # Point default tenants root via monkeypatch of helper root:
+                # _tenant_specs_from_env uses _DEFAULT_TENANTS_ROOT unless we
+                # pass tenants_root — from_env does not, so call helper + registry
+                # directly to control the root.
+                from governed_stack.sidecar import (
+                    _tenant_specs_from_env,
+                    TenantRegistry,
+                )
+
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    _tenant_specs_from_env(
+                        default_signing_key=shared,
+                        tenants_root=tenants_root,
+                        require_persisted_key=True,
+                    )
+                msg = str(ctx.exception)
+                self.assertIn("t_bad", msg)
+                self.assertIn("refusing shared default", msg)
+                # Prove shared key was NOT assigned to t_bad by building with require off
+                specs_demo = _tenant_specs_from_env(
+                    default_signing_key=shared,
+                    tenants_root=tenants_root,
+                    require_persisted_key=False,
+                )
+                assert specs_demo is not None
+                self.assertEqual(
+                    os.path.abspath(specs_demo["t_bad"].signing_key_path),
+                    os.path.abspath(shared),
+                )
+                self.assertEqual(
+                    os.path.abspath(specs_demo["t_ok"].signing_key_path),
+                    os.path.abspath(ok_pem),
+                )
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_from_env_require_fails_closed_when_per_tenant_pem_missing(self):
+        old = {k: os.environ.pop(k, None) for k in _MT_ENV}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                shared = str(Path(td) / "shared.pem")
+                CryptoEngine(private_key_path=shared)
+                os.environ["GOVERNANCE_TENANTS_JSON"] = json.dumps(
+                    {
+                        "lonely": {
+                            "api_key": "secret",
+                            "db_path": str(Path(td) / "lonely" / "audit.db"),
+                            # no signing_key_path → would have fallen back to shared
+                        }
+                    }
+                )
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    TenantRegistry.from_env(
+                        {
+                            "signing_key_path": shared,
+                            "require_persisted_key": True,
+                            "rate_limit_per_min": 0,
+                            "log_level": 50,
+                        }
+                    )
+                self.assertIn("refusing shared default", str(ctx.exception))
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_compare_digest_rejects_wrong_single_tenant_key(self):
+        """Smoke: wrong X-API-Key still 401 after compare_digest swap."""
+        with tempfile.TemporaryDirectory() as td:
+            key = str(Path(td) / "k.pem")
+            db = str(Path(td) / "a.db")
+            crypto = CryptoEngine(private_key_path=key)
+            stack = GovernedStack(
+                config={"db_path": db, "signing_key_path": key, "log_level": 50},
+                crypto=crypto,
+            )
+            svc = SidecarService(
+                config={
+                    "db_path": db,
+                    "signing_key_path": key,
+                    "api_key": "correct-key",
+                    "rate_limit_per_min": 0,
+                    "log_level": 50,
+                    "_skip_registry": True,
+                },
+                stack=stack,
+            )
+            httpd, _ = create_server(svc, host="127.0.0.1", port=0)
+            port = httpd.server_address[1]
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            try:
+                time.sleep(0.05)
+                code, body = _http_json(
+                    f"http://127.0.0.1:{port}/v1/check",
+                    method="POST",
+                    body={"channel": "raw", "token": "x", "action": "query"},
+                    headers={"X-API-Key": "wrong-key"},
+                )
+                self.assertEqual(code, 401)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                _close_stack(stack)
+
+
 class TestTenantRegistryFromEnv(unittest.TestCase):
+
     def test_api_keys_csv(self):
         old = {k: os.environ.pop(k, None) for k in _MT_ENV}
         try:

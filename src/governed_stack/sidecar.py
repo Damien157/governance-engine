@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hmac
 import json
 import os
 import threading
@@ -192,14 +193,52 @@ def _parse_api_keys_csv(raw: str) -> Dict[str, str]:
     return out
 
 
+
+def _resolve_tenant_signing_key(
+    tenant_id: str,
+    *,
+    explicit: str,
+    per_tenant_path: Path,
+    default_signing_key: str,
+    require_persisted: bool,
+) -> str:
+    """Pick a tenant signing PEM path.
+
+    Under ``require_persisted`` (GOVERNANCE_REQUIRE_PERSISTED_KEY=1), never fall
+    back to the shared default key — missing per-tenant PEM fails closed.
+    """
+    sk = (explicit or "").strip()
+    if sk:
+        if require_persisted and not Path(sk).is_file():
+            raise FileNotFoundError(
+                f"tenant {tenant_id!r}: require_persisted_key is set but "
+                f"signing_key_path {sk!r} does not exist — refusing to start "
+                "with a missing tenant PEM."
+            )
+        return sk
+    if per_tenant_path.is_file():
+        return str(per_tenant_path)
+    if require_persisted:
+        raise FileNotFoundError(
+            f"tenant {tenant_id!r}: require_persisted_key is set but per-tenant "
+            f"PEM {str(per_tenant_path)!r} is missing — refusing shared default "
+            f"signing key fallback ({default_signing_key!r})."
+        )
+    return default_signing_key
+
+
 def _tenant_specs_from_env(
     *,
     default_signing_key: str,
     tenants_root: Optional[Path] = None,
+    require_persisted_key: bool = False,
 ) -> Optional[Dict[str, TenantSpec]]:
     """Build tenant specs from GOVERNANCE_TENANTS_JSON or GOVERNANCE_API_KEYS.
 
     Returns None when neither multi-tenant env var is set (single-tenant mode).
+    When ``require_persisted_key`` is true, each tenant must have its own PEM
+    (explicit path or ``tenants/<id>/signing_key.pem``); shared default fallback
+    is refused.
     """
     root = tenants_root or _DEFAULT_TENANTS_ROOT
     json_raw = _env("GOVERNANCE_TENANTS_JSON")
@@ -218,10 +257,13 @@ def _tenant_specs_from_env(
             if not api_key:
                 raise ValueError(f"tenant {tid_s!r} missing api_key")
             db_path = str(cfg.get("db_path") or (root / tid_s / "audit.db"))
-            sk = str(cfg.get("signing_key_path") or "").strip()
-            if not sk:
-                per = root / tid_s / "signing_key.pem"
-                sk = str(per) if per.is_file() else default_signing_key
+            sk = _resolve_tenant_signing_key(
+                tid_s,
+                explicit=str(cfg.get("signing_key_path") or ""),
+                per_tenant_path=root / tid_s / "signing_key.pem",
+                default_signing_key=default_signing_key,
+                require_persisted=require_persisted_key,
+            )
             specs[tid_s] = TenantSpec(
                 tenant_id=tid_s,
                 api_key=api_key,
@@ -235,8 +277,13 @@ def _tenant_specs_from_env(
         mapping = _parse_api_keys_csv(csv_raw)
         specs = {}
         for tid, api_key in mapping.items():
-            per_key = root / tid / "signing_key.pem"
-            sk = str(per_key) if per_key.is_file() else default_signing_key
+            sk = _resolve_tenant_signing_key(
+                tid,
+                explicit="",
+                per_tenant_path=root / tid / "signing_key.pem",
+                default_signing_key=default_signing_key,
+                require_persisted=require_persisted_key,
+            )
             specs[tid] = TenantSpec(
                 tenant_id=tid,
                 api_key=api_key,
@@ -291,10 +338,17 @@ class TenantRegistry:
     ) -> Optional["TenantRegistry"]:
         cfg = dict(base_config or load_sidecar_config())
         default_key = str(cfg.get("signing_key_path") or _DEFAULT_KEY)
-        specs = _tenant_specs_from_env(default_signing_key=default_key)
+        require = bool(cfg.get("require_persisted_key")) or (
+            _env("GOVERNANCE_REQUIRE_PERSISTED_KEY", "0") == "1"
+        )
+        cfg["require_persisted_key"] = require
+        specs = _tenant_specs_from_env(
+            default_signing_key=default_key,
+            require_persisted_key=require,
+        )
         if specs is None:
             return None
-        return cls(
+        reg = cls(
             specs,
             master_api_key=cfg.get("master_api_key") or _env("GOVERNANCE_MASTER_API_KEY"),
             rate_limit_per_min=int(cfg.get("rate_limit_per_min") or DEFAULT_RATE_LIMIT_PER_MIN),
@@ -302,6 +356,10 @@ class TenantRegistry:
             crypto_factory=crypto_factory,
             service_factory=service_factory,
         )
+        if require:
+            # Fail at registry construction, not on first /v1/check.
+            reg.preflight_stacks()
+        return reg
 
     def tenant_ids(self) -> List[str]:
         return sorted(self.specs.keys())
@@ -320,6 +378,11 @@ class TenantRegistry:
                 svc = self._build_service(spec)
             self._services[tenant_id] = svc
             return svc
+
+    def preflight_stacks(self) -> None:
+        """Eager-build every tenant stack (fail-closed under require_persisted_key)."""
+        for tid in self.tenant_ids():
+            self.get_service(tid)
 
     def _build_service(self, spec: TenantSpec) -> "SidecarService":
         crypto = None
@@ -343,7 +406,7 @@ class TenantRegistry:
         """Return ``(tenant_id, service, error_reason)``."""
         if not api_key:
             return None, None, "missing or invalid X-API-Key"
-        if self.master_api_key and api_key == self.master_api_key:
+        if self.master_api_key and hmac.compare_digest(api_key, self.master_api_key):
             tid = (tenant_header or "").strip()
             if not tid:
                 return None, None, "X-Tenant-Id required with master key"
@@ -360,9 +423,17 @@ class TenantRegistry:
 
     def readiness(self) -> Tuple[bool, List[str]]:
         reasons: List[str] = []
+        require = bool(self.base_config.get("require_persisted_key"))
+        default_key = str(self.base_config.get("signing_key_path") or _DEFAULT_KEY)
+        default_abs = os.path.abspath(default_key)
         for tid in self.tenant_ids():
             spec = self.specs[tid]
             key_path = Path(spec.signing_key_path)
+            if require and os.path.abspath(str(key_path)) == default_abs:
+                reasons.append(
+                    f"tenant {tid}: signing key is shared default under "
+                    "require_persisted_key — per-tenant PEM required"
+                )
             if not key_path.is_file() and not _env("GOVERNANCE_SIGNING_KEY_PEM"):
                 reasons.append(f"tenant {tid}: signing key path missing: {key_path}")
             db_parent = Path(spec.db_path).parent
@@ -735,8 +806,8 @@ def make_handler(service: SidecarService) -> type:
             # Single-tenant: optional API key gate.
             expected = service.api_key
             if expected:
-                got = self._api_key_header()
-                if got != expected:
+                got = self._api_key_header() or ""
+                if not got or not hmac.compare_digest(got, expected):
                     self._send(
                         401,
                         {
