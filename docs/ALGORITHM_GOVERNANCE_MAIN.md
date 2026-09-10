@@ -67,3 +67,4 @@ One-page sealed-ALLOW overview (no P vs NP / consciousness / valuation hype):
 [NVNP_CONJECTURES.md](NVNP_CONJECTURES.md) (conjectures only — **not** a P vs NP proof).
 Safeguard charter: [ATOM_SAFEGUARD_II.md](ATOM_SAFEGUARD_II.md).
 Out-of-band research sketch (not a live gate): [ANALYTIC_ZERO_SUITE.md](ANALYTIC_ZERO_SUITE.md).
+Parked slide material (**not** product / not live gate): [SIDED_ASIDE.md](SIDED_ASIDE.md).

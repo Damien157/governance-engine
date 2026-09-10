@@ -1,4 +1,4 @@
-# N V NP conjectures — Collapse, Irreversibility, Energy Discipline
+# N V NP conjectures — Collapse, Polynomial-Space, Irreversibility, Energy Discipline
 
 > **This is NOT a Clay Millennium P vs NP proof.**  
 > Nothing here claims $\mathrm{P}=\mathrm{NP}$ or $\mathrm{P}\neq\mathrm{NP}$.
@@ -21,6 +21,11 @@ checkable witness that a candidate may never re-enter $\mathcal{C}$.
 ---
 
 ## Conjecture [Collapse]
+
+> **Alias:** Copilot / slide “**Monotone Contraction**” is the same family as
+> this section — $\Phi$ strictly decreasing along accepted steps. Prefer the
+> name **Collapse** in this repo; treat Monotone Contraction as a synonym, not
+> a second conjecture.
 
 **Statement.** Under a governed collapse operator $V$ (the “verb”), the
 potential $\Phi$ is **strictly decreasing** along accepted steps until a
@@ -63,6 +68,53 @@ class collapse.
 | HAIS `capability_cap` | Throttle when risk-elevated | **Implemented** |
 | SoftVerifier thresholds as $\Phi$ certificates | | **Hypothesis** / partial (training-time soft scores) |
 | Strict global $\Phi$ with $\varepsilon_t$ floor across *all* gates | | **Hypothesis** — not a single shared potential today |
+
+---
+
+## Conjecture [Polynomial-Space Collapse]
+
+**Statement.** For an NP instance $I$ **with structural restriction $R$**
+(bounded treewidth, bags / separators / neighborhoods, membrane quotas), the
+collapse engine maintains a live-label / survivor set whose size stays
+polynomial in the instance size at every stage:
+
+$$
+|L(I)| \le \mathrm{poly}(n)
+\quad\text{at every governed stage under } R.
+$$
+
+This is **FPT-style / restricted search hygiene**, not a claim about unrestricted NP.
+
+### Proof sketch
+
+1. **Route into structural regions.** Decompose $I$ under $R$ (treewidth bags,
+   separators, motif neighborhoods) so search is confined to locally bounded
+   pieces rather than the full exponential candidate cloud.
+2. **Membrane quotas.** Cap survivors per region / membrane; excess is
+   eliminated under checkable certificates (see Irreversibility).
+3. **Neural decay.** Soft / neural scores down-weight weak candidates inside
+   each region; scores alone never certify YES.
+4. **Certified pruning + no re-entry.** Hard membrane witnesses remove
+   candidates from $L(I)$; Irreversibility keeps them out unless $\pi$ is
+   explicitly revoked under Purpose→Cost→Risk→Authority→Audit.
+
+### Stack mapping
+
+| Piece | Role | Status |
+|-------|------|--------|
+| Imprint region / motif filters (DNA clash, local enumerator bounds) | Confine / prune structural pieces | **Partial** — instance-local filters **Implemented**; full bag/separator routing **Hypothesis** |
+| Global poly($n$) survivor quotas across all membranes | Enforce $|L(I)| \le \mathrm{poly}(n)$ at every stage | **Hypothesis** — not a shared quota meter today |
+| SoftVerifier / neural down-weight inside regions | Decay weak mass | **Partial** (training-time soft scores) |
+| Cross-run membrane registry + no re-entry | | **Hypothesis** (see Irreversibility) |
+
+### Hard caveat
+
+**$R$ is doing the work.** Polynomial survivors under bounded treewidth /
+quotas / neighborhoods is **not** general NP. Do **not** read this conjecture
+as Collapse Universality, $\mathrm{NP}\subseteq\mathrm{P}$, or poly-time for
+all NP. Premises without structural restriction remain unproven; see
+[What we are not claiming](#what-we-are-not-claiming) and
+[SIDED_ASIDE.md](SIDED_ASIDE.md).
 
 ---
 
@@ -134,6 +186,20 @@ $\mathrm{cap}_t = \exp(-2.2\, r'_t)$ from HAIS.
 4. **Algorithm Cost axis.** Declared `energy_cost` is an **estimate** on the
    scan intent — complementary bookkeeping, not a physics meter.
 
+### Optional form (hypothesis) — contraction per joule under structure
+
+Under the same structural restriction $R$ as Polynomial-Space Collapse, an
+optional strengthening asks for a **contraction-per-joule** lower bound:
+
+$$
+\frac{\Delta |L|}{\Delta E} \ge \frac{1}{\mathrm{poly}(n)}
+\quad\text{(when } \Delta E > 0 \text{ and survivors shrink).}
+$$
+
+This is a **hypothesis** only. There is **no** implemented joule / carbon meter
+in this stack; `energy_cost` and Haven2 residual are accounting / residual
+drive, not physics. Do not treat the inequality as measured.
+
 ### Stack mapping
 
 | Piece | Role | Status |
@@ -142,6 +208,7 @@ $\mathrm{cap}_t = \exp(-2.2\, r'_t)$ from HAIS.
 | HAIS `SovereignKernel` (m=0.5) | Capability cap from telemetry | **Implemented** |
 | `GovernedAlgorithm` energy_cost field | Cost estimate on scan | **Implemented** (declarative) |
 | Unified joule / carbon meter | | **Not implemented** — do not claim |
+| Contraction-per-joule $\Delta|L|/\Delta E \ge 1/\mathrm{poly}(n)$ under $R$ | Optional Energy Discipline form | **Hypothesis** — not a measured meter |
 | Single $\Phi$ tying energy + prune mass + NN forward cost | | **Hypothesis** |
 
 ---
@@ -212,14 +279,23 @@ Out-of-band analytic sketch (unrelated to 3DM ALLOW): [ANALYTIC_ZERO_SUITE.md](A
 
 See also: [QUANTUM_LINE.md](QUANTUM_LINE.md), [GOVERNED_CONTROLLER_NN.md](GOVERNED_CONTROLLER_NN.md),
 [ATOM_SAFEGUARD_II.md](ATOM_SAFEGUARD_II.md). Out-of-band: [ANALYTIC_ZERO_SUITE.md](ANALYTIC_ZERO_SUITE.md).
+Parked (not product): [SIDED_ASIDE.md](SIDED_ASIDE.md).
 
 ---
 
 ## What we are *not* claiming
 
 - No resolution of P vs NP.
+- **Collapse Universality does NOT hold here** and must **not** be used to claim
+  $\mathrm{NP}\subseteq\mathrm{P}$. That leap is parked in
+  [SIDED_ASIDE.md](SIDED_ASIDE.md) — not product, not a live gate premise.
+- Premises **without** structural restriction $R$ are **unproven**. Restricted
+  poly($n$) survivors under Polynomial-Space Collapse $\neq$ poly-time for all NP.
 - Imprint “superposition” is a **weighted classical draw**.
 - Haven2 “transistor” is a **discrete latch** on energy residual.
 - QUANTUM line is a **fused audit encoding**, not qubits.
 - DNA→…→Collapse is a **classical** imprint 3DM witness pipeline, not a P vs NP proof.
 - AnalyticZeroSuite is **out-of-band** research vocabulary — not a Riemann proof.
+
+Parked naming / marketing / unproven leaps (not on the live gate or
+[PRODUCT_SLICE.md](PRODUCT_SLICE.md)): [SIDED_ASIDE.md](SIDED_ASIDE.md).
