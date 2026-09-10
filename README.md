@@ -4,6 +4,8 @@ A **governed request stack** that composes Damien O’Driscoll’s existing pack
 
 **Package version:** `0.5.0` (governed action bus — no bypass; CI gates **ruff** + **mypy** on `src/governed_stack`).
 
+**Unified useful map (this arc):** [`docs/UNIFIED_USEFUL.md`](docs/UNIFIED_USEFUL.md) — live path, verified behavior, integrity fixes, queued bug→fix, roadmap gaps.
+
 **Bug→fix log:** [`docs/BUGFIXES.md`](docs/BUGFIXES.md) (0.4.4 latch BLOCK, scan routing reject, clamped Re default, PositionCBF HOCBF; plus 0.4.3 audit chain race).
 
 **Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (action bus → connectors → CI → tool/agent → tenancy/KMS).

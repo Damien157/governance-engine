@@ -32,3 +32,14 @@ No real sends. No GitHub push required for local verification.
 
 - `adaptive_re_update_unclamped` remains available and can overshoot by design (opt-in regression).
 - TG Dedalus fluids smoke: incomplete without Dedalus / `sym_grad` (harness documents skip).
+
+## Residual known issues — integrity queue (post PR #1)
+
+| Bug | Intended solution |
+|-----|-------------------|
+| API-key / master-key string `==` | Use `hmac.compare_digest` for equality checks in sidecar auth. |
+| Multi-tenant shared default PEM fallback | Require per-tenant signing PEM when multi-tenant (esp. `REQUIRE=1`); no silent shared key. |
+| Lazy tenant build under `REQUIRE=1` | Eager-build / preflight all tenants at serve start so `/ready` fail-fast matches runtime. |
+
+Full map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
+
