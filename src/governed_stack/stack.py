@@ -325,6 +325,11 @@ class GovernedStack:
             "e": float(step.e),
             "c": float(step.c),
         }
+        # Finite Dirichlet spectral summaries over engine history (not Riemann).
+        try:
+            haven2_info["zeta"] = self.haven2.zeta_summaries()
+        except Exception:
+            pass
 
         action = str(intent.get("action", "query"))
         solver_ok = decision == "ALLOW" and (

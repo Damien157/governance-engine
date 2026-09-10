@@ -62,3 +62,7 @@ also carries `tau` and `delta_r_prime` alongside `cap` / `risk` / `S` /
 `r_prime` / `instability`.
 
 Axis spine: [ALGORITHM_GOVERNANCE_MAIN.md](ALGORITHM_GOVERNANCE_MAIN.md).
+
+## Related: spectral audit
+
+Haven2 finite Dirichlet zeta summaries attach as `result["spectrum"]` via `governed_stack.spectral_audit` — see [SPECTRAL_AUDIT.md](SPECTRAL_AUDIT.md).

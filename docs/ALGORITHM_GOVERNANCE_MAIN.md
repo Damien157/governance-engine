@@ -48,7 +48,21 @@ When `GovernedAlgorithm.check` / `check_sync` returns, Audit also includes:
 - `quantum` — structured HAIS snapshot (`x, S, tau, r_prime, cap, delta_r_prime, T1, T2, T3, I`)
 - `quantum_line` — fixed-width fused continuous string (150 chars; see encoding docs)
 
-Details: [QUANTUM_LINE.md](QUANTUM_LINE.md). Related charters:
+Details: [QUANTUM_LINE.md](QUANTUM_LINE.md).
+
+## Spectral audit (Haven2)
+
+Alongside QUANTUM, Audit may include `spectrum` — finite Dirichlet summaries
+(`Z_E`, `Z_R`, `Z_C`, `Z_H`) from the live Haven2 engine. Honesty and limits:
+[SPECTRAL_AUDIT.md](SPECTRAL_AUDIT.md).
+
+## Buyer product slice
+
+One-page sealed-ALLOW overview (no P vs NP / consciousness / valuation hype):
+[PRODUCT_SLICE.md](PRODUCT_SLICE.md).
+
+## Related charters
+
 [GOVERNED_CONTROLLER_NN.md](GOVERNED_CONTROLLER_NN.md),
 [NVNP_CONJECTURES.md](NVNP_CONJECTURES.md) (conjectures only — **not** a P vs NP proof).
 Safeguard charter: [ATOM_SAFEGUARD_II.md](ATOM_SAFEGUARD_II.md).

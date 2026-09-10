@@ -60,6 +60,7 @@ from .quantum_line import (
     encode_quantum_line,
     quantum_from_hais_envelope,
 )
+from .spectral_audit import attach_spectrum, build_spectrum
 
 from .sidecar import (
     RateLimiter,
@@ -83,6 +84,8 @@ __all__ = [
     "GovernedPost",
     "GovernedAlgorithm",
     "attach_quantum",
+    "attach_spectrum",
+    "build_spectrum",
     "build_quantum_state",
     "encode_quantum_line",
     "decode_quantum_line",

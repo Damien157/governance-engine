@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional, Union
 from .contracts import validate_algorithm_scan
 from .mail import SendBlocked
 from .quantum_line import attach_quantum
+from .spectral_audit import attach_spectrum
 from .stack import GovernedStack, ensure_import_paths
 
 ensure_import_paths()
@@ -159,8 +160,13 @@ class GovernedAlgorithm:
             "risk": risk_summary,
             "blocked_run": not ok,
         }
-        # QUANTUM audit snapshot from HAIS envelope (Algorithm Audit axis).
-        return attach_quantum(result)
+        # QUANTUM + Haven2 spectral audit snapshots (Algorithm Audit axis).
+        attach_quantum(result)
+        return attach_spectrum(
+            result,
+            env,
+            engine=getattr(self.stack, "haven2", None),
+        )
 
     async def require_allow(
         self,
