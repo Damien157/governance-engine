@@ -1,5 +1,12 @@
 # Bug → solution log
 
+## Integrity — require_persisted_key missing PEM (sidecar / LocalPEM)
+
+| Bug | Solution |
+|-----|----------|
+| **`require_persisted_key` stub in sidecar** — `_build_stack` did `pass` then built `CryptoEngine` **without** the flag; LocalPEM only refused `path=None`, so a missing PEM path still **auto-generated** under production `GOVERNANCE_REQUIRE_PERSISTED_KEY=1`. | LocalPEM raises `FileNotFoundError` when require is set and the path is missing; sidecar passes `require_persisted_key` into `CryptoEngine`; `rotate()` still intentionally creates after backup (`require=False`). |
+
+
 Damien: “best solutions come from bug fixes — apply the same to our bug finds.”
 This file records documented findings turned into real fixes (not honesty labels).
 

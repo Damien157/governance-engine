@@ -432,11 +432,11 @@ class SidecarService:
         Path(key_path).parent.mkdir(parents=True, exist_ok=True)
         eng_crypto = crypto
         if eng_crypto is None and CryptoEngine is not None:
-            require = bool(self.config.get("require_persisted_key"))
-            if require and not Path(key_path).is_file():
-                # CryptoEngine generates+persists when path given and missing.
-                pass
-            eng_crypto = CryptoEngine(private_key_path=key_path)
+            # Honor require_persisted_key: LocalPEM refuses missing PEM under require.
+            eng_crypto = CryptoEngine(
+                private_key_path=key_path,
+                require_persisted_key=bool(self.config.get("require_persisted_key")),
+            )
         return GovernedStack(
             config={
                 "db_path": db_path,

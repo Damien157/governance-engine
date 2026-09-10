@@ -189,7 +189,7 @@ Agent rules: `src/governed_stack/AGENT_MAIL.md`, `AGENT_CALENDAR.md`, `AGENT_SOC
 | `GOVERNANCE_DB_PATH` | `artifacts/customer/audit.db` | Durable audit SQLite (single-tenant) |
 | `GOVERNANCE_SIGNING_KEY_PATH` | `artifacts/customer/signing_key.pem` | RSA-3072 PEM for audit/JWT (shared default) |
 | `GOVERNANCE_SIGNING_KEY_PEM` | — | Optional PEM text (local KMS-shaped) |
-| `GOVERNANCE_REQUIRE_PERSISTED_KEY` | unset/`0` | `1` = refuse ephemeral keys |
+| `GOVERNANCE_REQUIRE_PERSISTED_KEY` | unset/`0` | `1` = refuse ephemeral keys **and** refuse auto-generate when PEM path is missing |
 | `GOVERNANCE_API_KEY` | unset | Single-tenant: if set, `/v1/*` requires `X-API-Key` |
 | `GOVERNANCE_API_KEYS` | unset | Multi-tenant: `id:key,id2:key2` → `artifacts/tenants/<id>/audit.db` |
 | `GOVERNANCE_TENANTS_JSON` | unset | Multi-tenant JSON map (wins over `GOVERNANCE_API_KEYS` if set) |

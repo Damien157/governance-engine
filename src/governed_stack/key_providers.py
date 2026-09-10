@@ -175,8 +175,9 @@ class LocalPEMKeyProvider(SigningKeyProvider):
     File-backed RSA-3072 key.
 
     Load from path if present; otherwise generate and persist with 0600 perms
-    when a path is given. Ephemeral (path=None) is allowed for demos/tests
-    unless require_persisted_key=True or GOVERNANCE_REQUIRE_PERSISTED_KEY=1.
+    when a path is given and require_persisted_key is off. Ephemeral
+    (path=None) and missing-file auto-generate are refused when
+    require_persisted_key=True or GOVERNANCE_REQUIRE_PERSISTED_KEY=1.
     """
 
     def __init__(
@@ -193,6 +194,15 @@ class LocalPEMKeyProvider(SigningKeyProvider):
                 "GOVERNANCE_REQUIRE_PERSISTED_KEY=1) but private_key_path is "
                 "None — refusing to create an ephemeral unpersisted signing key. "
                 "Pass a PEM path, EnvKMSKeyProvider, or unset the requirement."
+            )
+        if require and private_key_path and not os.path.exists(private_key_path):
+            raise FileNotFoundError(
+                "require_persisted_key is set (config or "
+                "GOVERNANCE_REQUIRE_PERSISTED_KEY=1) but private_key_path "
+                f"{private_key_path!r} does not exist — refusing to auto-generate "
+                "a new signing key (would invalidate prior audit signatures). "
+                "Place the PEM at that path, unset the requirement for demos, "
+                "or use an intentional rotate()."
             )
 
         if private_key_path and os.path.exists(private_key_path):
@@ -453,7 +463,8 @@ class RotatingKeyProvider(SigningKeyProvider):
             except OSError:
                 os.remove(target)
 
-        self._primary = LocalPEMKeyProvider(target, require_persisted_key=True)
+        # Intentional create after backup — do not use require's "file must exist".
+        self._primary = LocalPEMKeyProvider(target, require_persisted_key=False)
         self._path = target
         if self._sidecar is None:
             self._sidecar = Path(target).with_name(self.SIDECAR_NAME)
