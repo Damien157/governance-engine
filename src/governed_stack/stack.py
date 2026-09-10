@@ -326,10 +326,12 @@ class GovernedStack:
             "c": float(step.c),
         }
         # Finite Dirichlet spectral summaries over engine history (not Riemann).
+        # FIX 4: surface zeta_summaries failures explicitly (do not silently drop).
         try:
             haven2_info["zeta"] = self.haven2.zeta_summaries()
-        except Exception:
-            pass
+        except Exception as exc:
+            haven2_info["zeta_error"] = f"{type(exc).__name__}: {exc}"
+            notes.append(f"haven2_zeta_summaries_error:{exc}")
 
         action = str(intent.get("action", "query"))
         solver_ok = decision == "ALLOW" and (

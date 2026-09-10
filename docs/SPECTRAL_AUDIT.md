@@ -60,3 +60,7 @@ result["haven2"]        # realm / p_hat / open / e / c [/ zeta]
 Related: [QUANTUM_LINE.md](QUANTUM_LINE.md),
 [ALGORITHM_GOVERNANCE_MAIN.md](ALGORITHM_GOVERNANCE_MAIN.md),
 [PRODUCT_SLICE.md](PRODUCT_SLICE.md).
+
+## Silent-fallback fixes
+
+See [SPECTRAL_AUDIT_FIXES.md](SPECTRAL_AUDIT_FIXES.md) (FIX 1–4: sigma, complete spectrum, malformed `c`, stack `zeta_error`).

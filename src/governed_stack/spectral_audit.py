@@ -10,6 +10,23 @@ Honesty (read this before claiming physics):
   - Algorithm gates usually see a short live history (often one step per
     ``govern``). Full multi-step zeta needs a sim/trace via
     ``Haven2Engine.zeta_summaries()``.
+
+CHANGES / FIXES (silent-fallback honesty):
+  FIX 1 — sigma preservation: if ``haven2.zeta`` is a Mapping and contains
+    ``sigma``, set ``out["sigma"]`` from that (safe float parse). Do **not**
+    require a top-level ``haven2["sigma"]`` key (it never exists on envelopes).
+  FIX 2 — complete spectrum or don't claim available: a tier (envelope
+    nested/flat, engine, minimal) is accepted only when **all four**
+    SPECTRUM_KEYS are present and float-coercible. Incomplete hits keep a
+    best_partial and fall through; if nothing is complete, ``available=False``
+    with partial keys + ``partial=True`` and a clear ``reason``.
+  FIX 3 — malformed ``c`` in minimal snapshot: if ``c`` is **present** but not
+    float-parsable, fail the minimal tier (return None). If ``c`` is absent /
+    None, length-1 engine score defaults to ``[0.0]`` ("c defaulted absent→0").
+  FIX 4 — stack zeta attach: ``GovernedStack.govern`` must not silently swallow
+    ``haven2.zeta_summaries()`` failures; set ``haven2_info["zeta_error"]`` and
+    append ``haven2_zeta_summaries_error:…`` to notes (decision unchanged).
+    See also docs/SPECTRAL_AUDIT_FIXES.md.
 """
 
 from __future__ import annotations
@@ -41,6 +58,13 @@ def _as_float_dict(src: Mapping[str, Any], keys: Sequence[str] = SPECTRUM_KEYS) 
             except (TypeError, ValueError):
                 continue
     return out
+
+
+def _complete(values: Optional[Mapping[str, Any]]) -> bool:
+    """True iff all four SPECTRUM_KEYS are present (already float-coerced)."""
+    if not values:
+        return False
+    return all(k in values for k in SPECTRUM_KEYS)
 
 
 def _zeta_from_haven2_block(haven2: Mapping[str, Any]) -> Optional[dict[str, float]]:
@@ -85,6 +109,9 @@ def _minimal_from_scalars(
 
     When only current ``p_hat`` / ``c`` exist (no engine history handle), treat
     them as length-1 series. Z_R is 0 without switch times. Document limits.
+
+    ``c`` honesty (FIX 3): absent/None → ``[0.0]`` ("c defaulted absent→0");
+    present but not float-parsable → fail this tier (return None).
     """
     try:
         from haven2.zeta import energy_zeta, engine_zeta, master_zeta, realm_switch_zeta
@@ -100,10 +127,15 @@ def _minimal_from_scalars(
         return None
 
     c_raw = haven2.get("c")
-    try:
-        c_trace = [float(c_raw)] if c_raw is not None else [0.0]
-    except (TypeError, ValueError):
+    if c_raw is None:
+        # c defaulted absent→0 for length-1 engine score
         c_trace = [0.0]
+    else:
+        try:
+            c_trace = [float(c_raw)]
+        except (TypeError, ValueError):
+            # present-but-bad: fail minimal tier (same honesty as bad p_hat)
+            return None
 
     p_trace = [p]
     switches: list[int] = []
@@ -123,6 +155,20 @@ def _minimal_from_scalars(
     }
 
 
+def _preserve_sigma_from_zeta(
+    out: MutableMapping[str, Any],
+    haven2: Mapping[str, Any],
+    fallback: float,
+) -> None:
+    """FIX 1: take sigma from nested haven2.zeta when present (no top-level key)."""
+    zeta_block = haven2.get("zeta")
+    if isinstance(zeta_block, Mapping) and "sigma" in zeta_block:
+        try:
+            out["sigma"] = float(zeta_block["sigma"])
+        except (TypeError, ValueError):
+            out["sigma"] = float(fallback)
+
+
 def build_spectrum(
     env: Optional[Mapping[str, Any]] = None,
     *,
@@ -131,11 +177,11 @@ def build_spectrum(
 ) -> dict[str, Any]:
     """Build a spectrum audit dict from envelope and/or Haven2 engine.
 
-    Priority:
+    Priority (each tier accepted only if **complete** — all four Z_* keys):
       1. Real zeta fields already on ``env['haven2']`` (nested or flat)
       2. ``engine.zeta_summaries(sigma)`` (same instance stack used)
       3. Minimal length-1 Dirichlet snapshot from ``p_hat`` / ``c``
-      4. Explicit nulls + reason when nothing computable
+      4. Explicit nulls / partial + reason when nothing complete
     """
     env = env or {}
     haven2 = env.get("haven2") if isinstance(env.get("haven2"), Mapping) else {}
@@ -144,20 +190,42 @@ def build_spectrum(
 
     source: Optional[str] = None
     values: Optional[dict[str, float]] = None
+    best_partial: Optional[dict[str, float]] = None
     notes: list[str] = [_HONESTY_NOTE]
 
-    values = _zeta_from_haven2_block(haven2)
-    if values:
+    def _keep_partial(candidate: Optional[dict[str, float]]) -> None:
+        nonlocal best_partial
+        if not candidate:
+            return
+        if best_partial is None or len(candidate) > len(best_partial):
+            best_partial = dict(candidate)
+
+    # Tier 1 — envelope nested/flat
+    candidate = _zeta_from_haven2_block(haven2)
+    if _complete(candidate):
+        values = candidate
         source = "envelope_haven2_zeta"
     else:
-        values = _zeta_from_engine(engine, sigma)
-        if values:
+        _keep_partial(candidate)
+
+    # Tier 2 — engine
+    if values is None:
+        candidate = _zeta_from_engine(engine, sigma)
+        if _complete(candidate):
+            values = candidate
             source = "haven2_engine_zeta_summaries"
         else:
-            values = _minimal_from_scalars(haven2, sigma=sigma)
-            if values:
-                source = "minimal_residual_snapshot"
-                notes.append(_SHORT_TRACE_NOTE)
+            _keep_partial(candidate)
+
+    # Tier 3 — minimal residual snapshot
+    if values is None:
+        candidate = _minimal_from_scalars(haven2, sigma=sigma)
+        if _complete(candidate):
+            values = candidate
+            source = "minimal_residual_snapshot"
+            notes.append(_SHORT_TRACE_NOTE)
+        else:
+            _keep_partial(candidate)
 
     out: dict[str, Any] = {
         "sigma": float(sigma),
@@ -165,25 +233,29 @@ def build_spectrum(
         "notes": notes,
         "available": values is not None,
     }
+    _preserve_sigma_from_zeta(out, haven2, sigma)
+
     if values is None:
-        out["Z_E"] = None
-        out["Z_R"] = None
-        out["Z_C"] = None
-        out["Z_H"] = None
+        # Incomplete / nothing: surface whatever partial keys we found.
+        for k in SPECTRUM_KEYS:
+            out[k] = best_partial.get(k) if best_partial else None
+        out["partial"] = True
+        if best_partial:
+            out["partial_keys"] = sorted(best_partial.keys())
         out["reason"] = (
-            "no haven2 zeta on envelope, no Haven2Engine.zeta_summaries, "
-            "and no p_hat residual for a minimal snapshot"
+            "incomplete spectrum: no tier yielded all four of "
+            f"{', '.join(SPECTRUM_KEYS)}; "
+            + (
+                f"partial={sorted(best_partial.keys())}"
+                if best_partial
+                else "no haven2 zeta on envelope, no Haven2Engine.zeta_summaries, "
+                "and no usable p_hat/c residual for a minimal snapshot"
+            )
         )
         return out
 
     for k in SPECTRUM_KEYS:
         out[k] = values.get(k)
-    # Preserve sigma from engine payload when present.
-    if "sigma" in haven2 and isinstance(haven2.get("zeta"), Mapping):
-        try:
-            out["sigma"] = float(haven2["zeta"].get("sigma", sigma))  # type: ignore[union-attr]
-        except (TypeError, ValueError):
-            pass
     # Trace-length honesty: live algorithm gate usually has short history.
     if source in ("envelope_haven2_zeta", "haven2_engine_zeta_summaries"):
         hist_len = None
