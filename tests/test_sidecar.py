@@ -399,6 +399,47 @@ class TestSidecarReadyFail(unittest.TestCase):
                 _close_stack(stack)
 
 
+class TestSidecarRequirePersistedKey(unittest.TestCase):
+    def test_build_stack_refuses_missing_pem_when_required(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = str(Path(td) / "audit.db")
+            missing = str(Path(td) / "missing.pem")
+            with self.assertRaises(FileNotFoundError):
+                SidecarService(
+                    config={
+                        "db_path": db,
+                        "signing_key_path": missing,
+                        "require_persisted_key": True,
+                        "api_key": None,
+                        "rate_limit_per_min": 0,
+                        "log_level": 50,
+                        "_skip_registry": True,
+                    }
+                )
+            self.assertFalse(Path(missing).exists())
+
+    def test_build_stack_generates_when_require_off(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = str(Path(td) / "audit.db")
+            key = str(Path(td) / "signing.pem")
+            svc = SidecarService(
+                config={
+                    "db_path": db,
+                    "signing_key_path": key,
+                    "require_persisted_key": False,
+                    "api_key": None,
+                    "rate_limit_per_min": 0,
+                    "log_level": 50,
+                    "_skip_registry": True,
+                }
+            )
+            stack = svc._build_stack()
+            try:
+                self.assertTrue(Path(key).is_file())
+            finally:
+                _close_stack(stack)
+
+
 class TestLoadConfig(unittest.TestCase):
     def test_defaults(self):
         old = {k: os.environ.pop(k, None) for k in _MT_ENV}

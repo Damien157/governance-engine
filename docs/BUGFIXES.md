@@ -6,6 +6,14 @@ This file records documented findings turned into real fixes (not honesty labels
 HAIS sigmoid **m=0.5** unchanged. Sketches stay off the live `govern()` decision path.
 No real sends. No GitHub push required for local verification.
 
+Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
+
+## Integrity — require_persisted_key missing PEM (sidecar / LocalPEM)
+
+| Bug | Solution |
+|-----|----------|
+| **`require_persisted_key` stub in sidecar** — `_build_stack` did `pass` then built `CryptoEngine` **without** the flag; LocalPEM only refused `path=None`, so a missing PEM path still **auto-generated** under production `GOVERNANCE_REQUIRE_PERSISTED_KEY=1`. | LocalPEM raises `FileNotFoundError` when require is set and the path is missing; sidecar passes `require_persisted_key` into `CryptoEngine`; `rotate()` still intentionally creates after backup (`require=False`). |
+
 ## 0.4.4 — bug→fix pass
 
 | Bug | Solution |
@@ -25,3 +33,13 @@ No real sends. No GitHub push required for local verification.
 
 - `adaptive_re_update_unclamped` remains available and can overshoot by design (opt-in regression).
 - TG Dedalus fluids smoke: incomplete without Dedalus / `sym_grad` (harness documents skip).
+
+## Residual known issues — integrity queue (post PR #1)
+
+| Bug | Intended solution |
+|-----|-------------------|
+| API-key / master-key string `==` | Use `hmac.compare_digest` for equality checks in sidecar auth. |
+| Multi-tenant shared default PEM fallback | Require per-tenant signing PEM when multi-tenant (esp. `REQUIRE=1`); no silent shared key. |
+| Lazy tenant build under `REQUIRE=1` | Eager-build / preflight all tenants at serve start so `/ready` fail-fast matches runtime. |
+
+Full map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).

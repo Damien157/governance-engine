@@ -51,6 +51,28 @@ class TestLocalPEM(unittest.TestCase):
         p = LocalPEMKeyProvider(None)
         self.assertTrue(p.verify(b"x", p.sign(b"x")))
 
+    def test_require_refuses_missing_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = str(Path(td) / "absent.pem")
+            with self.assertRaises(FileNotFoundError) as ctx:
+                LocalPEMKeyProvider(missing, require_persisted_key=True)
+            self.assertIn("does not exist", str(ctx.exception))
+            self.assertFalse(Path(missing).exists())
+
+    def test_missing_path_still_generates_without_require(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = str(Path(td) / "new.pem")
+            p = LocalPEMKeyProvider(path, require_persisted_key=False)
+            self.assertTrue(Path(path).is_file())
+            self.assertTrue(p.verify(b"x", p.sign(b"x")))
+
+    def test_crypto_engine_require_refuses_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = str(Path(td) / "gone.pem")
+            with self.assertRaises(FileNotFoundError):
+                CryptoEngine(private_key_path=missing, require_persisted_key=True)
+            self.assertFalse(Path(missing).exists())
+
 
 class TestEnvKMS(unittest.TestCase):
     def test_sign_verify_private_pem_none_and_jwt(self):
