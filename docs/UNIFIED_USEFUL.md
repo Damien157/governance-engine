@@ -85,9 +85,9 @@ See README three-tier table and `governed_stack.catalog`.
 
 | # | Bug | Intended fix | Severity |
 |---|-----|----------------|----------|
-| 1 | API-key / master-key compares use `==` | `hmac.compare_digest` on equality checks | Defense-in-depth |
-| 2 | Multi-tenant falls back to **shared default PEM** when per-tenant key missing | Require per-tenant PEM when multi-tenant (esp. under REQUIRE=1); refuse shared fallback | Integrity / isolation |
-| 3 | Lazy tenant stack build: `/ready` not ready but first `/v1/check` can 500 under REQUIRE=1 | Eager-build or preflight all tenants at serve start | Ops fail-fast |
+| 1 | API-key / master-key compares use `==` | **Fixed** — `hmac.compare_digest` | Defense-in-depth |
+| 2 | Multi-tenant falls back to **shared default PEM** when per-tenant key missing | **Fixed** — refuse fallback under REQUIRE=1; failure-path tests | Integrity / isolation |
+| 3 | Lazy tenant stack build under REQUIRE=1 | **Fixed** — `preflight_stacks()` at registry construct | Ops fail-fast |
 
 ---
 

@@ -34,12 +34,13 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 - `adaptive_re_update_unclamped` remains available and can overshoot by design (opt-in regression).
 - TG Dedalus fluids smoke: incomplete without Dedalus / `sym_grad` (harness documents skip).
 
-## Residual known issues — integrity queue (post PR #1)
 
-| Bug | Intended solution |
-|-----|-------------------|
-| API-key / master-key string `==` | Use `hmac.compare_digest` for equality checks in sidecar auth. |
-| Multi-tenant shared default PEM fallback | Require per-tenant signing PEM when multi-tenant (esp. `REQUIRE=1`); no silent shared key. |
-| Lazy tenant build under `REQUIRE=1` | Eager-build / preflight all tenants at serve start so `/ready` fail-fast matches runtime. |
+## Integrity — multi-tenant PEM + auth compare (sidecar)
+
+| Bug | Solution |
+|-----|----------|
+| **Shared default PEM fallback** under multi-tenant + `REQUIRE=1` — missing `tenants/<id>/signing_key.pem` silently reused the process default key. | `_resolve_tenant_signing_key` raises `FileNotFoundError` (refusing shared default); `TenantRegistry.from_env` passes require and **preflight_stacks()** so failure is at start, not first `/v1/check`. |
+| API-key / master-key string `==` | `hmac.compare_digest` on master and single-tenant equality checks. |
+| Lazy tenant build vs `/ready` under require | `preflight_stacks()` eager-builds all tenants when require is set. |
 
 Full map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
