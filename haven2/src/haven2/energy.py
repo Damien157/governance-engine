@@ -29,7 +29,9 @@ class EnergyState:
         self.e = float(self.e0)
         self.history_e = [self.e]
         self.history_c = []
-        self.history_p_hat = [self.p_hat]
+        # No t=0 seed: history_p_hat[i] is the residual after dynamical step i
+        # (0-based), aligned with TransistorLatch.switch_times and c_scores.
+        self.history_p_hat = []
 
     @property
     def running_mean_c(self) -> float:

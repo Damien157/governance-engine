@@ -98,14 +98,14 @@ class Haven2Engine:
         c_t : engine-specific drive (e.g. volatility shock / anomaly)
         v_t : volatility observation for TargetRealm
         """
-        t_before = self.energy.t
         self.energy.step(c_t)
         p_hat = self.energy.p_hat
+        # Leave latch time alone — TransistorLatch._t is 0-based step index
+        # (matches history_p_hat / c_scores list indices for zeta).
         realm = self.latch.step(
             p_hat,
             v_t,
             target_fn=self.target_fn,
-            t=t_before + 1,
         )
         switched = self.latch.history_switched[-1]
         open_ = self.latch.history_open[-1]

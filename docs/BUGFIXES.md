@@ -43,4 +43,10 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 | API-key / master-key string `==` | `hmac.compare_digest` on master and single-tenant equality checks. |
 | Lazy tenant build vs `/ready` under require | `preflight_stacks()` eager-builds all tenants when require is set. |
 
+## Integrity — Haven2 switch_times vs history_p_hat (0-based)
+
+| Bug | Solution |
+|-----|----------|
+| Engine passed `t=t_before+1` into the latch, so `switch_times` were 1-based while `history_p_hat` was seeded at t=0 and `c_scores` / zeta used 0-based `arange` — same physical step got different `(t+1)^σ` weights (`Z_C` vs `Z_E`/`Z_R`). | Leave `TransistorLatch._t` alone (0-based); do not seed `history_p_hat`; regression asserts `history_p_hat[τ] ==` switched step’s `p_hat`. |
+
 Full map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
