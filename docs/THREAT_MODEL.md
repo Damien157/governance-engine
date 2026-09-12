@@ -3,7 +3,7 @@
 Short, honest model for operators running the customer-ops sidecar / `GovernedStack`.
 Not a formal certification, penetration-test report, or SaaS security whitepaper.
 
-Package context: **0.4.4** — bug→fix pass on live contracts + latch; builds on 0.4.3 audit chain race fix + this doc.
+Package context: **0.5.x** — action bus + hosted check + integrity fixes (`REQUIRE` missing PEM, multi-tenant shared-PEM refuse, `compare_digest`); builds on 0.4.x latch/audit soak.
 
 ## Assets
 
@@ -26,9 +26,10 @@ Package context: **0.4.4** — bug→fix pass on live contracts + latch; builds 
 
 | Threat | Mitigation in this tree | Residual risk |
 |--------|-------------------------|---------------|
-| **Key theft** (disk/env) | Local PEM permissions; `GOVERNANCE_REQUIRE_PERSISTED_KEY`; optional rotate via `RotatingKeyProvider` + `signing_keys.json` | No HSM/cloud KMS SDK; host compromise wins |
+| **Key theft** (disk/env) | Local PEM permissions; `GOVERNANCE_REQUIRE_PERSISTED_KEY` refuses missing/ephemeral PEM and (multi-tenant) shared default fallback; optional rotate via `RotatingKeyProvider` + `signing_keys.json` | No HSM/cloud KMS SDK; host compromise wins |
 | **Audit tamper** | SHA-256 hash chain + RSA signatures; `scripts/audit_verify.py` / `verify_chain()` | Attacker with signing key can rewrite a plausible chain |
 | **Intent injection / PII in To** | Recipients not placed in scanned intent; policy PII rules on subject/body; redact before audit envelope | Callers can still put PII in scanned fields; To is out-of-band by convention |
+| **API-key timing** | Master + single-tenant equality use `hmac.compare_digest` | Multi-tenant mapped keys still use `dict.get` on `_api_key_index` — **accepted residual** (hash lookup ≠ linear `==`; full constant-time multi-secret compare would scan all keys). |
 | **Rate abuse** | Sidecar in-memory sliding window per tenant (`GOVERNANCE_RATE_LIMIT_PER_MIN`); ops user rate signals | Process-local only; restart resets; not Redis/distributed |
 | **REVIEW voucher replay** | Single-use jti revoke after durable ALLOW+log; hard gates still apply | Stolen unused voucher still works until use/expiry |
 | **Sketch confusion** | Catalog/README mark sketches off-path; soak/tests exercise live `govern()` only | Operators wiring sketches into production themselves |
