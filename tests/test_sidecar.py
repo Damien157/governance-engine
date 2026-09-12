@@ -270,8 +270,82 @@ class TestSidecarHTTP(unittest.TestCase):
         reasons = body.get("reasons") or []
         self.assertTrue(any("scan_intent_forbids:password" in str(r) for r in reasons))
 
+    def test_check_missing_token_auth_failed(self):
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={"channel": "mail", "subject": "hi", "body": "there"},
+        )
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("decision"), "BLOCK")
+        self.assertEqual(body.get("error_code"), "GOV_AUTH_FAILED")
+        reasons = body.get("reasons") or []
+        self.assertTrue(any("missing token" in str(r) for r in reasons))
+
+    def test_execute_refused_405(self):
+        code, body = _http_json(
+            f"{self.base}/v1/execute",
+            method="POST",
+            body={"channel": "mail", "token": "x"},
+        )
+        self.assertEqual(code, 405)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("error"), "execute_not_supported")
+
+    def test_algorithm_missing_purpose_blocks(self):
+        token = self.service.issue_token("tester", "operator")
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={"channel": "algorithm", "token": token, "summary": "no purpose"},
+        )
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertEqual(body.get("decision"), "BLOCK")
+        self.assertEqual(body.get("error_code"), "GOV_INTENT_INVALID")
+
+    def test_mail_slim_omits_quantum_spectrum(self):
+        """Mail/calendar/social use slim envelope — no quantum/spectrum leak fields."""
+        token = self.service.issue_token("tester", "operator")
+        code, body = _http_json(
+            f"{self.base}/v1/check",
+            method="POST",
+            body={
+                "channel": "mail",
+                "token": token,
+                "subject": "hello",
+                "body": "world without secrets",
+            },
+        )
+        self.assertEqual(code, 200)
+        assert isinstance(body, dict)
+        self.assertIn(body.get("decision"), ("ALLOW", "BLOCK", "REVIEW"))
+        for k in ("quantum", "quantum_line", "spectrum", "hais", "haven2"):
+            self.assertNotIn(k, body)
+        self.assertIn("error_code", body)  # may be None
+        self.assertIn("reasons", body)
+
+    def test_malformed_json_400(self):
+        import urllib.request
+        req = urllib.request.Request(
+            f"{self.base}/v1/check",
+            data=b"{not-json",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            self.fail("expected HTTPError")
+        except urllib.error.HTTPError as exc:
+            self.assertEqual(exc.code, 400)
+            raw = exc.read().decode("utf-8")
+            payload = json.loads(raw)
+            self.assertEqual(payload.get("error"), "bad_request")
+
 
 class TestSidecarApiKey(unittest.TestCase):
+
     """Separate server with GOVERNANCE_API_KEY required on /v1/*."""
 
     @classmethod
