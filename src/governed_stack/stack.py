@@ -334,11 +334,12 @@ class GovernedStack:
             notes.append(f"haven2_zeta_summaries_error:{exc}")
 
         action = str(intent.get("action", "query"))
+        # Gates 3dm/control solvers only: ALLOW and (latch open OR action=="query").
+        # Latch decision BLOCK below is control/3dm only — mail/calendar/social stay
+        # ALLOW when closed and do not consult solver_ok (no solvers on those actions yet).
         solver_ok = decision == "ALLOW" and (
             transistor_open or action == "query"
         )
-        # Prefer: control/3dm require open transistor; query/mail/calendar/social may
-        # proceed when ALLOW (latch does not block those). Closed latch → BLOCK.
         if decision == "ALLOW" and action in ("control", "3dm") and not transistor_open:
             decision = "BLOCK"
             if "transistor_closed" not in reasons:
