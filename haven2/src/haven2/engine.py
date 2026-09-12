@@ -10,6 +10,13 @@ from haven2.energy import EnergyState, t_reset
 from haven2.evte import EVTEWeights, score_c_t
 from haven2.realms import Realm, TargetRealmFn
 from haven2.transistor import TransistorLatch
+
+# Numeric codes for governed_delta (Realm is a str Enum; .value is not float).
+_REALM_ORDINAL: dict[Realm, float] = {
+    Realm.CALM: 0.0,
+    Realm.NORMAL: 1.0,
+    Realm.DEFENSIVE: 2.0,
+}
 from haven2.zeta import (
     DEFAULT_SIGMA,
     energy_zeta,
@@ -31,6 +38,7 @@ class StepRecord:
     switched: bool
     v: float
     c_score: float
+    delta: float
 
 
 @dataclass
@@ -54,6 +62,7 @@ class Haven2Engine:
     latch: TransistorLatch = field(init=False)
     history: list[StepRecord] = field(init=False, default_factory=list)
     c_scores: list[float] = field(init=False, default_factory=list)
+    history_delta: list[float] = field(init=False, default_factory=list)
     _equity: float = field(init=False, default=1.0)
     _equity_peak: float = field(init=False, default=1.0)
     _steps_since_switch: int = field(init=False, default=10**9)
@@ -67,6 +76,7 @@ class Haven2Engine:
         )
         self.history = []
         self.c_scores = []
+        self.history_delta = []
         self._equity = 1.0
         self._equity_peak = 1.0
         self._steps_since_switch = 10**9
@@ -83,6 +93,25 @@ class Haven2Engine:
     def reset_time(self, epsilon: float | None = None) -> int:
         eps = self.epsilon_switch if epsilon is None else epsilon
         return t_reset(eps, self.energy.e0, self.energy.equilibrium, self.rho)
+
+    def governed_delta(
+        self,
+        p_hat: float,
+        realm: Realm,
+        c_score: float,
+        v_t: float,
+        abs_err: float,
+    ) -> float:
+        """Tunable governed functional over residual / realm / C / vol / forecast err."""
+        w = self.weights
+        realm_code = _REALM_ORDINAL.get(realm, 1.0)
+        return float(
+            w.delta_p * float(p_hat)
+            + w.delta_r * realm_code
+            + w.delta_c * float(c_score)
+            + w.delta_v * float(v_t)
+            + w.delta_f * float(abs_err)
+        )
 
     def step(
         self,
@@ -139,6 +168,13 @@ class Haven2Engine:
         else:
             self._steps_since_switch += 1
 
+        delta = self.governed_delta(
+            p_hat=p_hat,
+            realm=realm,
+            c_score=c_score,
+            v_t=v_t,
+            abs_err=abs_err,
+        )
         rec = StepRecord(
             t=self.energy.t,
             e=self.energy.e,
@@ -150,9 +186,11 @@ class Haven2Engine:
             switched=switched,
             v=float(v_t),
             c_score=c_score,
+            delta=delta,
         )
         self.history.append(rec)
         self.c_scores.append(c_score)
+        self.history_delta.append(delta)
         return rec
 
     def run(
@@ -190,6 +228,7 @@ class Haven2Engine:
             "Z_E": energy_zeta(p_hat, sigma),
             "Z_R": realm_switch_zeta(self.latch.switch_times, sigma),
             "Z_C": engine_zeta(self.c_scores, sigma),
+            "Z_D": engine_zeta(self.history_delta, sigma),
             "Z_H": master_zeta(p_hat, self.latch.switch_times, self.c_scores, sigma),
             "sigma": float(sigma),
         }
