@@ -30,10 +30,12 @@ Package context: **0.5.x** — action bus + hosted check + integrity fixes (`REQ
 | **Audit tamper** | SHA-256 hash chain + RSA signatures; `scripts/audit_verify.py` / `verify_chain()` | Attacker with signing key can rewrite a plausible chain |
 | **Intent injection / PII in To** | Recipients not placed in scanned intent; policy PII rules on subject/body; redact before audit envelope | Callers can still put PII in scanned fields; To is out-of-band by convention |
 | **API-key timing** | Master + single-tenant equality use `hmac.compare_digest` | Multi-tenant mapped keys still use `dict.get` on `_api_key_index` — **accepted residual** (hash lookup ≠ linear `==`; full constant-time multi-secret compare would scan all keys). |
+| **Injected `crypto_factory` / `crypto=`** | Default path builds `CryptoEngine` with `require_persisted_key` (LocalPEM fail-closed) | `TenantRegistry(crypto_factory=…)` or pre-injected `crypto=` skips that constructor — **accepted residual** (no in-tree callers today). A future KMS/HSM injector must enforce its own fail-closed key presence; do not assume PR #1/#2 cover that hook. |
 | **Rate abuse** | Sidecar in-memory sliding window per tenant (`GOVERNANCE_RATE_LIMIT_PER_MIN`); ops user rate signals | Process-local only; restart resets; not Redis/distributed |
 | **REVIEW voucher replay** | Single-use jti revoke after durable ALLOW+log; hard gates still apply | Stolen unused voucher still works until use/expiry |
 | **Sketch confusion** | Catalog/README mark sketches off-path; soak/tests exercise live `govern()` only | Operators wiring sketches into production themselves |
-| **Concurrent audit corruption** | `AuditStorage` WAL + **single-writer** `_chain_lock` held across tip→ts→hash→INSERT; monotonic timestamps under lock; soak `tests/test_audit_soak.py` | Identical intents may cache-hit (TTL) and skip a new row — expected. Multi-process writers to one DB are **not** supported for chain integrity. |
+| **Concurrent audit corruption** | `AuditStorage` WAL + **single-writer** `_chain_lock` held across tip→ts→hash→INSERT; monotonic timestamps under lock; soak `tests/test_audit_soak.py` (threads in one process) | Identical intents may cache-hit (TTL) and skip a new row — expected. |
+| **Multi-process audit writers** | In-process lock + soak only | Multiple processes writing one audit DB are **not** supported for hash-chain integrity — **accepted residual**; one writer process per DB. |
 
 ## Explicit non-claims
 
