@@ -34,6 +34,12 @@ class EVTEWeights:
     w_DD: float = 0.2
     w_FE: float = 0.2
     w_E: float = 0.1
+    # Governed delta (tuneable) — linear mix over residual / realm / C / vol / forecast err
+    delta_p: float = 0.25
+    delta_r: float = 0.25
+    delta_c: float = 0.25
+    delta_v: float = 0.15
+    delta_f: float = 0.10
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -42,6 +48,11 @@ class EVTEWeights:
             "DD": self.w_DD,
             "FE": self.w_FE,
             "E": self.w_E,
+            "delta_p": self.delta_p,
+            "delta_r": self.delta_r,
+            "delta_c": self.delta_c,
+            "delta_v": self.delta_v,
+            "delta_f": self.delta_f,
         }
 
 
