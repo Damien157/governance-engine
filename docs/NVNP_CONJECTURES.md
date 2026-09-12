@@ -9,6 +9,8 @@
 
 Spine: [ALGORITHM_GOVERNANCE_MAIN.md](ALGORITHM_GOVERNANCE_MAIN.md).
 
+Local latch check-vs-find opening (not Clay): [LATCH_CERTIFICATE.md](LATCH_CERTIFICATE.md).
+
 ---
 
 ## Notation
