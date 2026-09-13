@@ -122,7 +122,8 @@ Prefer hosted-check / domain app over further spectrum toys for economic value.
 5. Soft/Hard productization beyond charter docs.
 6. Optional: more eval fixtures for rate-limit / REVIEW / HAIS_CAP **live** (today partly synthetic in projection tests).
 
-Roadmap: [FULL_GOVERNANCE_ROADMAP.md](FULL_GOVERNANCE_ROADMAP.md).
+Roadmap: [FULL_GOVERNANCE_ROADMAP.md](FULL_GOVERNANCE_ROADMAP.md).  
+Cost-to-recreate (live vs R&D): [COST_TO_RECREATE.md](COST_TO_RECREATE.md).
 
 ---
 
