@@ -101,13 +101,18 @@ Stable operator-facing shape for `POST /v1/check`. Check-only — no remote side
 - Not a sender / calendar writer / social publisher
 - Not a Clay / P vs NP claim surface
 
-### Operator smoke
+### Operator smoke + eval
 
 ```bash
-.venv/bin/python scripts/hosted_check_smoke.py
+.venv/bin/python scripts/hosted_check_smoke.py   # thin contract smoke
+.venv/bin/python scripts/hosted_check_eval.py    # fuller matrix: HTTP + ActionBus require_allow
 ```
 
-Ephemeral sidecar + matrix (health/ready, missing JWT, execute 405, mail slim ALLOW, algorithm purpose / missing purpose, malformed JSON). Complements `tests/test_sidecar.py`; does not replace CI.
+`hosted_check_eval.py` hits the **live** ephemeral sidecar and `GovernedActionBus`
+(mail stub side_effect only on ALLOW). It is not a parallel simulated gate.
+Example scoring maths in that script is a self-check only and does **not** drive
+`govern()` / HAIS. Complements `tests/test_sidecar.py` / `tests/test_action_bus.py`;
+does not replace CI.
 
 ## Not claimed
 
