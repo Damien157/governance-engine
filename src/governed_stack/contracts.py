@@ -83,6 +83,16 @@ BIO_SCAN_FORBIDDEN = frozenset({
     "select_agent_id",
     "pathogen_stock",
 })
+# Override / skip keys — sealed backdoors (never silent-allow).
+BIO_BYPASS_FORBIDDEN = frozenset({
+    "force_allow",
+    "bypass",
+    "skip_policy",
+    "skip_bio_policy",
+    "policy_override",
+    "override_decision",
+})
+BIO_SCAN_REJECT_KEYS = BIO_SCAN_FORBIDDEN | BIO_BYPASS_FORBIDDEN
 
 
 def _reject_forbidden_scan_keys(
@@ -713,7 +723,7 @@ class BioScanIntent(GovernIntent):
     @model_validator(mode="before")
     @classmethod
     def _reject_bio_payloads(cls, data: Any) -> Any:
-        _reject_forbidden_scan_keys(data, BIO_SCAN_FORBIDDEN, where="bio")
+        _reject_forbidden_scan_keys(data, BIO_SCAN_REJECT_KEYS, where="bio")
         return data
 
     @classmethod

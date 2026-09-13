@@ -7,6 +7,7 @@ import pytest
 from governed_stack.bio import BioBlocked, GovernedBio
 from governed_stack.bio_policy import classify_bio
 from governed_stack.contracts import (
+    BIO_BYPASS_FORBIDDEN,
     BIO_SCAN_FORBIDDEN,
     BioScanIntent,
     IntentValidationError,
@@ -113,3 +114,75 @@ def test_governed_bio_allow_and_block(tmp_path, monkeypatch):
             domain="aging",
             intervention_class="enhancement",
         )
+
+
+def test_bypass_keys_rejected():
+    with pytest.raises((IntentValidationError, Exception)):
+        BioScanIntent.model_validate(
+            {
+                "action": "bio_govern",
+                "purpose": "clock",
+                "domain": "aging",
+                "intervention_class": "literature",
+                "force_allow": True,
+            }
+        )
+
+
+def test_authority_role_does_not_allow_block_class():
+    r = classify_bio(
+        purpose="declared",
+        domain="disease",
+        intervention_class="pathogen_work",
+        authority_role="pi",
+    )
+    assert r.decision == "BLOCK"
+    assert r.error_code == "GOV_BIO_DUAL_USE"
+
+
+def test_policy_review_is_wiggle_not_allow():
+    r = classify_bio(
+        purpose="in vivo aging intervention metadata",
+        domain="aging",
+        intervention_class="in_vivo_declared",
+        irreversible=True,
+    )
+    assert r.decision == "REVIEW"
+    assert r.error_code == "GOV_BIO_REVIEW"
+
+
+def test_raw_channel_bio_shaped_blocked():
+    from governed_stack.sidecar import SidecarService
+
+    assert SidecarService._bio_shaped_probe(
+        {
+            "purpose": "x",
+            "domain": "aging",
+            "intervention_class": "literature",
+        }
+    )
+    assert SidecarService._bio_shaped_probe({"sequence": "ATGC", "action": "run"})
+    assert SidecarService._bio_shaped_probe({"force_allow": True, "action": "x"})
+    assert not SidecarService._bio_shaped_probe({"action": "ping", "note": "hi"})
+
+
+def test_probe_uses_reject_union_and_nested_payload():
+    from governed_stack.sidecar import SidecarService
+
+    # top-level bypass via shared union
+    assert SidecarService._bio_shaped_probe({"force_allow": True})
+    # nested wet-lab / bypass — raw path never hits Pydantic
+    assert SidecarService._bio_shaped_probe({"action": "ping", "payload": {"sequence": "ATGC"}})
+    assert SidecarService._bio_shaped_probe({"action": "ping", "payload": {"force_allow": True}})
+    # nested structural bio markers
+    assert SidecarService._bio_shaped_probe(
+        {
+            "action": "ping",
+            "payload": {
+                "purpose": "x",
+                "domain": "aging",
+                "intervention_class": "literature",
+            },
+        }
+    )
+    assert not SidecarService._bio_shaped_probe({"action": "ping", "payload": {"note": "hi"}})

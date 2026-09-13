@@ -33,7 +33,8 @@ from .bio import intent_for_scan as bio_intent_for_scan
 from .bio_policy import classify_bio, tighten_decision
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .contracts import (
-    ALGORITHM_SCAN_FORBIDDEN, BIO_SCAN_FORBIDDEN,
+    ALGORITHM_SCAN_FORBIDDEN,
+    BIO_SCAN_REJECT_KEYS,
     GOV_INTENT_INVALID,
     GOV_RATE_LIMIT,
     IntentValidationError,
@@ -598,7 +599,7 @@ class SidecarService:
             }
             try:
                 _reject_forbidden_scan_keys(
-                    scan_view, BIO_SCAN_FORBIDDEN, where="bio"
+                    scan_view, BIO_SCAN_REJECT_KEYS, where="bio"
                 )
                 purpose = body.get("purpose")
                 domain = body.get("domain")
@@ -740,6 +741,21 @@ class SidecarService:
                     for k, v in body.items()
                     if k not in ("channel", "token")
                 }
+            # Gravity: bio-shaped payloads cannot slingshot around bio_policy via raw.
+            probe = raw_intent if isinstance(raw_intent, dict) else {
+                k: v for k, v in body.items() if k not in ("channel", "token")
+            }
+            if isinstance(probe, dict) and self._bio_shaped_probe(probe):
+                return {
+                    "decision": "BLOCK",
+                    "ok": False,
+                    "reasons": [
+                        "sidecar:bio_backdoor_blocked:use_channel_bio",
+                    ],
+                    "error_code": GOV_INTENT_INVALID,
+                    "latency_ms": 0.0,
+                    "entry_id": None,
+                }
             if not isinstance(raw_intent, dict):
                 env = await self.stack.govern({"action": ""}, token)
                 return self._slim_envelope(env)
@@ -758,6 +774,32 @@ class SidecarService:
 
     def check(self, body: Dict[str, Any]) -> Dict[str, Any]:
         return _run_coro(self.check_async(body))
+
+    @staticmethod
+    def _bio_shaped_probe(payload: Dict[str, Any]) -> bool:
+        """True if payload should use channel bio (no raw/other slingshot).
+
+        Sits on ``channel=raw`` after JSON→dict parse and *before*
+        ``stack.govern`` — not after BioScanIntent. Raw never hits
+        ``_reject_forbidden_scan_keys`` / Pydantic, so this probe must
+        mirror nested ``payload`` depth itself.
+        """
+        if not isinstance(payload, dict):
+            return False
+        layers = [payload]
+        nested = payload.get("payload")
+        if isinstance(nested, dict):
+            layers.append(nested)
+        for layer in layers:
+            keys = layer.keys()
+            if keys & BIO_SCAN_REJECT_KEYS:
+                return True
+            if {"purpose", "domain", "intervention_class"}.issubset(keys):
+                return True
+            action = str(layer.get("action") or "").strip().lower()
+            if action in {"bio_govern", "bio", "bio_check"}:
+                return True
+        return False
 
     @staticmethod
     def _slim_envelope(env: Dict[str, Any]) -> Dict[str, Any]:
@@ -963,7 +1005,8 @@ def make_handler(service: SidecarService) -> type:
                         "error": "execute_not_supported",
                         "reason": (
                             "sidecar is check-only; mutations must use "
-                            "in-process GovernedActionBus.execute"
+                            "in-process GovernedActionBus.execute; "
+                            "bio channel has no execute path"
                         ),
                     },
                 )
