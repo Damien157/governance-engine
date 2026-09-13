@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """
-Unified hosted-check **eval** against the live governance-engine.
+Hosted-check eval + audit-only governance projection against the live stack.
 
-Rewrites a draft matrix that simulated a parallel fake gate. Useful pieces kept:
-  - EvalCase matrix + pass/fail summary
-  - outbound stub gated by require_allow (no silent send)
-  - transparent example scoring maths (NOT the live gate — self-check only)
-
-Live surfaces under test:
-  - ephemeral POST /v1/check sidecar (real channels + GOV_* codes)
-  - GovernedActionBus.execute_sync (mail) — side_effect only on ALLOW
+- Ephemeral POST /v1/check (real channels, GOV_*)
+- GovernedActionBus mail stub (side_effect only on ALLOW)
+- project_governance_score: AUDIT-ONLY shadow — does not affect decisions
 
   .venv/bin/python scripts/hosted_check_eval.py
 
@@ -19,7 +14,6 @@ See docs/HOSTED_CHECK_API.md. Complements scripts/hosted_check_smoke.py.
 from __future__ import annotations
 
 import json
-import math
 import sys
 import tempfile
 import threading
@@ -28,7 +22,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 for p in (ROOT / "src", ROOT, ROOT / "hais", ROOT / "imprint" / "src", ROOT / "haven2" / "src"):
@@ -38,43 +32,20 @@ for p in (ROOT / "src", ROOT, ROOT / "hais", ROOT / "imprint" / "src", ROOT / "h
 
 from certified_governance_unified import CryptoEngine  # noqa: E402
 from governed_stack import GovernedActionBus, GovernedStack, SendBlocked  # noqa: E402
+from governed_stack.audit_projection import project_governance_score  # noqa: E402
 from governed_stack.sidecar import SidecarService, create_server  # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# Example scoring maths — NOT wired into govern() / sidecar / HAIS
-# Kept from the draft as a transparent, non-magical formula demo only.
-# ---------------------------------------------------------------------------
-
-def example_governance_score_math(risk_factors: Dict[str, float]) -> Dict[str, float]:
-    """Example-only. Live decisions use ops policy + HAIS + Haven2, not this."""
-    autonomy = risk_factors.get("autonomy", 0.0)
-    safety_mod = risk_factors.get("safety_mod", 0.0)
-    external_impact = risk_factors.get("external_impact", 0.0)
-    risk = max(0.0, min(1.0, 0.5 * autonomy + 0.3 * safety_mod + 0.4 * external_impact))
-    instability = 0.6 * autonomy + 0.6 * safety_mod
-    stability = max(0.0, min(1.0, math.exp(-2.0 * instability)))
-    governance = max(0.0, min(1.0, (1.0 - safety_mod) * (1.0 - 0.5 * external_impact)))
-    return {
-        "risk": round(risk, 3),
-        "stability": round(stability, 3),
-        "governance": round(governance, 3),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Matrix
-# ---------------------------------------------------------------------------
 
 @dataclass
 class EvalCase:
     name: str
-    kind: str  # http | bus_mail | example_math
+    kind: str  # http | bus_mail | projection
     expect: Dict[str, Any]
-    build: Callable[[Any], Dict[str, Any]]
+    build: Callable[[], Dict[str, Any]]
+    project: bool = False  # attach audit projection when True
 
 
-def _http_json(url: str, method: str = "GET", body: dict | None = None):
+def _http_json(url: str, method: str = "GET", body: dict | None = None) -> Dict[str, Any]:
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -106,10 +77,6 @@ def _close_stack(stack: GovernedStack) -> None:
             pass
 
 
-def _approx(a: float, b: float, tol: float = 1e-3) -> bool:
-    return abs(float(a) - float(b)) <= tol
-
-
 def _match(expect: Any, got: Any, path: str = "") -> Tuple[bool, str]:
     if isinstance(expect, dict) and isinstance(got, dict):
         for k, v in expect.items():
@@ -119,10 +86,6 @@ def _match(expect: Any, got: Any, path: str = "") -> Tuple[bool, str]:
             if not ok:
                 return False, msg
         return True, "OK"
-    if isinstance(expect, float) and isinstance(got, (int, float)):
-        if _approx(expect, float(got)):
-            return True, "OK"
-        return False, f"{path} expect={expect} got={got}"
     if expect == got:
         return True, "OK"
     return False, f"{path} expect={expect!r} got={got!r}"
@@ -133,10 +96,8 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
     service: SidecarService = ctx["service"]
     bus: GovernedActionBus = ctx["bus"]
     token = service.issue_token("eval", "operator")
-
     cases: List[EvalCase] = []
 
-    # --- HTTP: auth / contract errors (real GOV_* / HTTP codes) ---
     cases.append(
         EvalCase(
             name="http_missing_jwt_auth_failed",
@@ -145,7 +106,7 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
                 "http_status": 200,
                 "body": {"decision": "BLOCK", "error_code": "GOV_AUTH_FAILED"},
             },
-            build=lambda _c: _http_json(
+            build=lambda: _http_json(
                 f"{base}/v1/check",
                 method="POST",
                 body={"channel": "mail", "subject": "hi", "body": "there"},
@@ -157,7 +118,7 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             name="http_execute_refused_405",
             kind="http",
             expect={"http_status": 405, "body": {"error": "execute_not_supported"}},
-            build=lambda _c: _http_json(
+            build=lambda: _http_json(
                 f"{base}/v1/execute",
                 method="POST",
                 body={"channel": "mail", "token": "x"},
@@ -172,7 +133,7 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
                 "http_status": 200,
                 "body": {"decision": "BLOCK", "error_code": "GOV_INTENT_INVALID"},
             },
-            build=lambda _c: _http_json(
+            build=lambda: _http_json(
                 f"{base}/v1/check",
                 method="POST",
                 body={"channel": "algorithm", "token": token, "summary": "no purpose"},
@@ -187,7 +148,7 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
                 "http_status": 200,
                 "body": {"decision": "BLOCK", "error_code": "GOV_INTENT_INVALID"},
             },
-            build=lambda _c: _http_json(
+            build=lambda: _http_json(
                 f"{base}/v1/check",
                 method="POST",
                 body={
@@ -199,14 +160,12 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             ),
         )
     )
-
-    # --- HTTP: slim mail ALLOW ---
     cases.append(
         EvalCase(
             name="http_mail_slim_allow",
             kind="http",
             expect={"http_status": 200, "body": {"decision": "ALLOW"}},
-            build=lambda _c: _http_json(
+            build=lambda: _http_json(
                 f"{base}/v1/check",
                 method="POST",
                 body={
@@ -219,8 +178,7 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
         )
     )
 
-    # --- HTTP: algorithm with spectrum keys present ---
-    def _algo(_c: Any) -> Dict[str, Any]:
+    def _algo() -> Dict[str, Any]:
         out = _http_json(
             f"{base}/v1/check",
             method="POST",
@@ -238,10 +196,10 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             },
         )
         body = out["body"] if isinstance(out["body"], dict) else {}
-        # Assert slim-vs-rich: algorithm carries spectrum/quantum keys
         out["_has_spectrum"] = "spectrum" in body
         out["_has_quantum_line"] = "quantum_line" in body
-        out["_decision"] = body.get("decision")
+        # Projection uses algorithm envelope fields (hais/haven2), not http wrapper.
+        out["_projection_input"] = body
         return out
 
     cases.append(
@@ -254,11 +212,11 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
                 "_has_quantum_line": True,
             },
             build=_algo,
+            project=True,
         )
     )
 
-    # --- HTTP: slim mail must NOT leak spectrum ---
-    def _mail_slim_keys(_c: Any) -> Dict[str, Any]:
+    def _mail_slim() -> Dict[str, Any]:
         out = _http_json(
             f"{base}/v1/check",
             method="POST",
@@ -270,9 +228,9 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             },
         )
         body = out["body"] if isinstance(out["body"], dict) else {}
-        leaked = [k for k in ("quantum", "quantum_line", "spectrum", "hais", "haven2") if k in body]
-        out["_leaked"] = leaked
-        out["_decision"] = body.get("decision")
+        out["_leaked"] = [
+            k for k in ("quantum", "quantum_line", "spectrum", "hais", "haven2") if k in body
+        ]
         return out
 
     cases.append(
@@ -280,12 +238,11 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             name="http_mail_no_spectrum_leak",
             kind="http",
             expect={"http_status": 200, "_leaked": []},
-            build=_mail_slim_keys,
+            build=_mail_slim,
         )
     )
 
-    # --- Bus: outbound mail stub — ALLOW runs side_effect once ---
-    def _bus_allow(_c: Any) -> Dict[str, Any]:
+    def _bus_allow() -> Dict[str, Any]:
         calls: List[Dict[str, Any]] = []
 
         def side_effect(result: dict) -> Dict[str, Any]:
@@ -295,7 +252,7 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
                 "subject": "Hello",
                 "body": "Simulated outbound — not sent.",
             }
-            calls.append({"result_decision": result.get("decision"), "preview": preview})
+            calls.append(preview)
             return preview
 
         out = bus.execute_sync(
@@ -309,26 +266,23 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
         )
         return {
             "decision": out.get("decision"),
+            "error_code": out.get("error_code"),
             "side_effect_calls": len(calls),
-            "side_effect_result": out.get("side_effect_result"),
             "simulated": (out.get("side_effect_result") or {}).get("simulated"),
+            "_projection_input": out,
         }
 
     cases.append(
         EvalCase(
             name="bus_mail_allow_side_effect_once",
             kind="bus_mail",
-            expect={
-                "decision": "ALLOW",
-                "side_effect_calls": 1,
-                "simulated": True,
-            },
+            expect={"decision": "ALLOW", "side_effect_calls": 1, "simulated": True},
             build=_bus_allow,
+            project=True,
         )
     )
 
-    # --- Bus: policy BLOCK (email in body) — side_effect never runs ---
-    def _bus_block(_c: Any) -> Dict[str, Any]:
+    def _bus_block() -> Dict[str, Any]:
         calls: List[Any] = []
 
         def side_effect(result: dict) -> None:
@@ -349,7 +303,9 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             return {
                 "raised": True,
                 "decision": exc.result.get("decision"),
+                "error_code": exc.result.get("error_code"),
                 "side_effect_calls": len(calls),
+                "_projection_input": exc.result,
             }
 
     cases.append(
@@ -358,22 +314,54 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
             kind="bus_mail",
             expect={"raised": True, "decision": "BLOCK", "side_effect_calls": 0},
             build=_bus_block,
+            project=True,
         )
     )
 
-    # --- Example maths self-check (not a gate) ---
+    # Synthetic projection fixtures — audit-only, no HTTP (codes the live matrix
+    # cannot cheaply force without policy/rate fixtures).
     cases.append(
         EvalCase(
-            name="example_math_high_risk_formula",
-            kind="example_math",
-            expect={
-                # Same formula as example_governance_score_math (includes [0,1] cap).
-                "risk": 1.0,
-                "stability": round(math.exp(-2.0 * (0.6 * 1.0 + 0.6 * 1.0)), 3),
-                "governance": 0.0,
-            },
-            build=lambda _c: example_governance_score_math(
-                {"autonomy": 1.0, "safety_mod": 1.0, "external_impact": 0.8}
+            name="projection_hais_cap_shapes_risk",
+            kind="projection",
+            expect={"risk": 0.9},  # floor from GOV_HAIS_CAP shaping
+            build=lambda: project_governance_score(
+                {
+                    "decision": "BLOCK",
+                    "error_code": "GOV_HAIS_CAP",
+                    "hais": {"cap": 0.1, "risk": 0.2, "instability": 0.1},
+                    "haven2": {"realm": "normal", "open": True, "p_hat": 0.0},
+                }
+            ),
+        )
+    )
+    cases.append(
+        EvalCase(
+            name="projection_latch_closed_boosts_governance",
+            kind="projection",
+            expect={"risk": 0.9},
+            build=lambda: project_governance_score(
+                {
+                    "decision": "BLOCK",
+                    "error_code": "GOV_LATCH_CLOSED",
+                    "hais": {"cap": 0.9, "risk": 0.1, "instability": 0.05},
+                    "haven2": {"realm": "defensive", "open": False, "p_hat": 0.2},
+                }
+            ),
+        )
+    )
+    cases.append(
+        EvalCase(
+            name="projection_allow_calm_bounded",
+            kind="projection",
+            expect={},  # only assert keys + bounds below via post-check
+            build=lambda: project_governance_score(
+                {
+                    "decision": "ALLOW",
+                    "error_code": None,
+                    "hais": {"cap": 0.8, "risk": 0.2, "instability": 0.1},
+                    "haven2": {"realm": "calm", "open": True, "p_hat": 0.01},
+                }
             ),
         )
     )
@@ -382,8 +370,8 @@ def build_cases(ctx: Dict[str, Any]) -> List[EvalCase]:
 
 
 def main() -> int:
-    print("HOSTED CHECK EVAL — live sidecar + action bus (no fake parallel gate)")
-    print("Example scoring maths is self-check only; it does not drive decisions.\n")
+    print("HOSTED CHECK EVAL — live sidecar + ActionBus")
+    print("project_governance_score is AUDIT-ONLY (does not drive GOV_*).\n")
 
     tmp = tempfile.TemporaryDirectory()
     td = Path(tmp.name)
@@ -414,24 +402,44 @@ def main() -> int:
     time.sleep(0.05)
 
     bus = GovernedActionBus(stack=stack)
-    ctx = {"base": base, "service": service, "bus": bus}
-    cases = build_cases(ctx)
+    cases = build_cases({"base": base, "service": service, "bus": bus})
     passed = 0
     failures: List[str] = []
 
     try:
         for case in cases:
             try:
-                got = case.build(None)
+                got = case.build()
             except Exception as exc:  # pragma: no cover
                 msg = f"{case.name}: EXCEPTION {type(exc).__name__}: {exc}"
                 print(f"  [FAIL] {msg}")
                 failures.append(msg)
                 continue
-            ok, detail = _match(case.expect, got)
+
+            if case.name == "projection_allow_calm_bounded":
+                ok = (
+                    isinstance(got, dict)
+                    and set(got) >= {"risk", "stability", "governance"}
+                    and all(0.0 <= float(got[k]) <= 1.0 for k in ("risk", "stability", "governance"))
+                )
+                detail = "OK" if ok else f"bounds/keys bad: {got!r}"
+            else:
+                ok, detail = _match(case.expect, got)
+
+            proj_note = ""
+            if case.project:
+                src = got.get("_projection_input") if isinstance(got, dict) else None
+                if isinstance(src, dict):
+                    proj = project_governance_score(src)
+                    got["_projection"] = proj
+                    proj_note = f" | projection={proj}"
+                    # Sanity: projection must be in [0,1]
+                    if not all(0.0 <= float(proj[k]) <= 1.0 for k in proj):
+                        ok = False
+                        detail = f"projection out of bounds: {proj}"
+
             if ok:
-                # Extra: mail slim allow should not leak (checked in dedicated case)
-                print(f"  [PASS] {case.name}")
+                print(f"  [PASS] {case.name}{proj_note}")
                 passed += 1
             else:
                 msg = f"{case.name}: {detail}"

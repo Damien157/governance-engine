@@ -110,8 +110,7 @@ Stable operator-facing shape for `POST /v1/check`. Check-only — no remote side
 
 `hosted_check_eval.py` hits the **live** ephemeral sidecar and `GovernedActionBus`
 (mail stub side_effect only on ALLOW). It is not a parallel simulated gate.
-Example scoring maths in that script is a self-check only and does **not** drive
-`govern()` / HAIS. Complements `tests/test_sidecar.py` / `tests/test_action_bus.py`;
+Audit-only `project_governance_score` (`governed_stack.audit_projection`) projects `(risk, stability, governance)` from live `decision` / `error_code` / `hais` / `haven2` — **not** wired into `govern()` / HAIS. Complements `tests/test_sidecar.py` / `tests/test_action_bus.py`;
 does not replace CI.
 
 ## Not claimed
