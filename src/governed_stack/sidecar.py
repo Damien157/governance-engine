@@ -1,7 +1,7 @@
 """Customer-operable HTTP sidecar over the live govern gate (check-only).
 
 Stdlib ``http.server`` only — no FastAPI / heavy web deps.
-Never sends mail/calendar/social/algorithm; ``POST /v1/check`` runs govern/adapters
+Never sends mail/calendar/social/algorithm/bio; ``POST /v1/check`` runs govern/adapters
 in check mode only (algorithm includes QUANTUM + spectrum audit fields). Sketches stay off this path.
 
 There is intentionally **no** ``POST /v1/execute``: remote arbitrary side
@@ -29,9 +29,11 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
+from .bio import intent_for_scan as bio_intent_for_scan
+from .bio_policy import classify_bio, tighten_decision
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .contracts import (
-    ALGORITHM_SCAN_FORBIDDEN,
+    ALGORITHM_SCAN_FORBIDDEN, BIO_SCAN_FORBIDDEN,
     GOV_INTENT_INVALID,
     GOV_RATE_LIMIT,
     IntentValidationError,
@@ -589,6 +591,102 @@ class SidecarService:
                 text=str(body.get("text") or body.get("body") or ""),
                 platform=str(body.get("platform") or ""),
             )
+
+        elif channel == "bio":
+            scan_view = {
+                k: v for k, v in body.items() if k not in ("channel", "token")
+            }
+            try:
+                _reject_forbidden_scan_keys(
+                    scan_view, BIO_SCAN_FORBIDDEN, where="bio"
+                )
+                purpose = body.get("purpose")
+                domain = body.get("domain")
+                intervention_class = body.get("intervention_class")
+                if not isinstance(purpose, str) or not purpose.strip():
+                    raise IntentValidationError(
+                        "bio purpose required",
+                        errors=[{
+                            "loc": ["bio", "purpose"],
+                            "msg": "purpose required",
+                            "type": "missing",
+                        }],
+                    )
+                if not isinstance(domain, str) or not domain.strip():
+                    raise IntentValidationError(
+                        "bio domain required",
+                        errors=[{
+                            "loc": ["bio", "domain"],
+                            "msg": "domain required",
+                            "type": "missing",
+                        }],
+                    )
+                if not isinstance(intervention_class, str) or not intervention_class.strip():
+                    raise IntentValidationError(
+                        "bio intervention_class required",
+                        errors=[{
+                            "loc": ["bio", "intervention_class"],
+                            "msg": "intervention_class required",
+                            "type": "missing",
+                        }],
+                    )
+                summary = str(body.get("summary") or "")
+                risk_notes = str(body.get("risk_notes") or "")
+                authority_role = str(body.get("authority_role") or "")
+                irreversible = bool(body.get("irreversible") or False)
+                human_subjects = bool(body.get("human_subjects") or False)
+                dual_use_flag = bool(body.get("dual_use_flag") or False)
+                intent = bio_intent_for_scan(
+                    purpose=purpose.strip(),
+                    domain=domain.strip(),
+                    intervention_class=intervention_class.strip(),
+                    summary=summary,
+                    subject_scope=str(body.get("subject_scope") or ""),
+                    risk_notes=risk_notes,
+                    authority_role=authority_role,
+                    irreversible=irreversible,
+                    human_subjects=human_subjects,
+                    dual_use_flag=dual_use_flag,
+                )
+            except IntentValidationError as exc:
+                return {
+                    "decision": "BLOCK",
+                    "ok": False,
+                    "reasons": [str(exc)],
+                    "error_code": getattr(exc, "code", None) or GOV_INTENT_INVALID,
+                    "latency_ms": 0.0,
+                    "entry_id": None,
+                }
+            env = await self.stack.govern(intent, token)
+            policy = classify_bio(
+                purpose=str(body.get("purpose") or ""),
+                domain=str(body.get("domain") or ""),
+                intervention_class=str(body.get("intervention_class") or ""),
+                summary=str(body.get("summary") or ""),
+                risk_notes=str(body.get("risk_notes") or ""),
+                authority_role=str(body.get("authority_role") or ""),
+                irreversible=bool(body.get("irreversible") or False),
+                human_subjects=bool(body.get("human_subjects") or False),
+                dual_use_flag=bool(body.get("dual_use_flag") or False),
+            )
+            decision, bio_reasons, bio_code = tighten_decision(
+                str(env.get("decision", "BLOCK")), policy
+            )
+            slim = self._slim_envelope(env)
+            slim["decision"] = decision
+            slim["ok"] = decision == "ALLOW"
+            reasons = list(slim.get("reasons") or [])
+            for r in bio_reasons:
+                if r not in reasons:
+                    reasons.append(r)
+            slim["reasons"] = reasons
+            slim["bio_policy"] = policy.as_dict()
+            if bio_code:
+                slim["error_code"] = bio_code
+            slim["domain"] = str(body.get("domain") or "")
+            slim["intervention_class"] = str(body.get("intervention_class") or "")
+            return slim
+
         elif channel == "algorithm":
             # Auth JWT stays in body["token"]; scan must not smuggle secrets.
             # Exclude channel + JWT from the forbidden-key view (JWT is not a
