@@ -60,6 +60,55 @@ Forbidden on the scan (same as contracts): ``private_key``, ``password``,
 Mail / calendar / social stay slim (``decision``, ``reasons``, ``error_code``,
 ``latency_ms``, ``entry_id``) so existing clients keep working.
 
+
+## Customer check contract
+
+Stable operator-facing shape for `POST /v1/check`. Check-only — no remote side effects.
+
+### Auth
+
+| Mechanism | Where | Notes |
+|-----------|--------|------|
+| Body JWT `token` | JSON field | Required for `/v1/check`. Issue with same signing key as the sidecar (`SidecarService.issue_token`). Missing/invalid → `decision=BLOCK`, `error_code=GOV_AUTH_FAILED`. |
+| `X-API-Key` | HTTP header | Optional unless `GOVERNANCE_API_KEY` / multi-tenant keys are configured; then required on `/v1/*`. |
+
+### Channels (scanned body fields)
+
+| channel | Required scanned fields | Forbidden on scan (→ `GOV_INTENT_INVALID`) | Out of band |
+|---------|-------------------------|--------------------------------------------|-------------|
+| `mail` | `subject`, `body` (or `text`) | routing secrets / smuggled keys per contracts | To / Cc / From |
+| `calendar` | `summary`, `description`, `location` | attendees / start / end on scan | attendees / start / end |
+| `social` | `text` (optional `platform`) | handles / URLs on scan | recipients / URLs / handles |
+| `algorithm` | `purpose` | `private_key` / `password` / `secret` / scan-level `token` | — |
+| `raw` | `intent` dict | per `GovernIntent` / contracts | — |
+
+### Response shapes
+
+| Channel | Typical keys |
+|---------|----------------|
+| mail / calendar / social | `decision`, `ok`, `reasons`, `entry_id`, `error_code`, `latency_ms` (**slim** — no `quantum` / `spectrum` / `hais` / `haven2`) |
+| algorithm | slim keys **plus** `hais` (slim), `haven2` (slim), `quantum`, `quantum_line`, `spectrum` when available |
+
+`decision` ∈ {`ALLOW`, `BLOCK`, `REVIEW`}. HTTP 200 is common even on BLOCK (decision in body). Malformed JSON → HTTP 400 `{ "error": "bad_request" }`.
+
+### Error codes (selected)
+
+`GOV_AUTH_FAILED`, `GOV_INTENT_INVALID`, `GOV_POLICY_BLOCK`, `GOV_POLICY_REVIEW`, `GOV_HAIS_CAP`, `GOV_LATCH_CLOSED`, `GOV_RATE_LIMIT`, `GOV_INTERNAL`.
+
+### Explicitly refused
+
+- `POST /v1/execute` → HTTP 405 `{ "error": "execute_not_supported" }`
+- Not a sender / calendar writer / social publisher
+- Not a Clay / P vs NP claim surface
+
+### Operator smoke
+
+```bash
+.venv/bin/python scripts/hosted_check_smoke.py
+```
+
+Ephemeral sidecar + matrix (health/ready, missing JWT, execute 405, mail slim ALLOW, algorithm purpose / missing purpose, malformed JSON). Complements `tests/test_sidecar.py`; does not replace CI.
+
 ## Not claimed
 
 - Not a Millennium / NP subset-of-P proof

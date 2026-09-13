@@ -1,4 +1,4 @@
-"""VERIFY side of docs/LATCH_CERTIFICATE.md — O(T) replay check for switch certificates."""
+"""Latch replay integrity for docs/LATCH_CERTIFICATE.md (VERIFY framing, not a complexity result)."""
 
 from __future__ import annotations
 
