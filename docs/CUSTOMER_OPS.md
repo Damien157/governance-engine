@@ -59,6 +59,9 @@ curl -s http://127.0.0.1:8080/metrics
 
 ### Check (never send)
 
+Contract + operator smoke: [HOSTED_CHECK_API.md](HOSTED_CHECK_API.md) (`scripts/hosted_check_smoke.py`).
+
+
 Issue a JWT from the same stack (demo/operator) or your token issuer wired to the same signing key:
 
 ```bash

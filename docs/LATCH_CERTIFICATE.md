@@ -43,8 +43,9 @@ A **switch certificate** for a claimed switch set \(S\) is the triple
 2. Accept iff the produced `switch_times` equal \(S\) (and optionally final
    realm / open bit match claimed values).
 
-No search. No quantum. Same spirit as NP verification: short witness + poly-time
-(here linear) checker. Regression: `haven2/tests/test_latch_certificate.py`.
+**Honesty:** \(O(T)\) replay-check is **not** a Haven2-specific complexity result. For *any* deterministic system, re-running a claimed input trace and comparing outputs costs the same order as generating the trace — that is what determinism means. VERIFY is a **framing move**: it names the easy half so the interesting half (SEARCH) is well-posed. Same *shape* as NP verification (short witness + poly-time checker), not a complexity theorem about Haven2.
+
+Regression: `haven2/tests/test_latch_certificate.py` (latch replay integrity, not a complexity finding).
 
 ## SEARCH (harder, open) — forcing drive
 
@@ -77,8 +78,8 @@ Falsifiable pieces:
 
 - Exhibit a poly-time *finder* for forcing drives under a fixed discretization
   of \((c,v)\) → conjecture weakens for that fragment.
-- Show VERIFY itself needs superlinear work under honest encoding → conjecture
-  wrong on the check side (unexpected).
+- (VERIFY superlinearity would be surprising for this deterministic replay
+  checker — not the interesting falsification target.)
 
 ## What this is for
 
@@ -91,9 +92,16 @@ Falsifiable pieces:
 
 ## Next experiments (only if useful)
 
-1. Discretize \((c,v)\) to a finite alphabet; measure search cost vs \(T\) for
-   forcing DEFENSIVE from CALM.
-2. Keep VERIFY as the permanent integrity check for latch/spectrum tests
-   (already the spirit of `test_switch_time_p_hat_align.py`).
+1. Discretize \((c,v)\) to a finite alphabet and study forcing DEFENSIVE from
+   CALM. **Caveat:** measuring wall-clock or node-count growth under *naive
+   brute force* over the product alphabet is exponential **by construction of
+   the search method**, not evidence that the reachability problem is
+   intrinsically hard. A meaningful experiment needs a competent search
+   (heuristic-guided, branch-and-bound with pruning, or an ILP/SAT encoding
+   handed to a real solver) and even then yields **suggestive empirics**, not
+   a proof.
+2. Keep VERIFY as a permanent *integrity* check for latch/spectrum tests
+   (already the spirit of `test_switch_time_p_hat_align.py`) — not as a
+   complexity claim.
 3. Do **not** widen `solver_ok` or product SPECTRUM_KEYS for this — research
-   lane only.
+   lane only. Prefer the customer hosted-check slice for product value.
