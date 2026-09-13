@@ -7,6 +7,16 @@ Parked mythos stays in [SIDED_ASIDE.md](SIDED_ASIDE.md).
 Spine: **presence ≠ access** — govern before side effects; HAIS throttle;
 Haven2 latch; QUANTUM + ζ spectrum as **audit**, not physics theatre.
 
+**Verification legend (this doc):**
+
+| Label | Meaning |
+|-------|---------|
+| **Verified** | Reproduced from real source + local run in the integrity review (or Damien-confirmed) |
+| **Reported** | Assistant local green / merged to `main`; not independently re-run by Damien |
+| **Accepted residual** | Documented deliberate non-fix |
+
+CI on GitHub remains red until Damien157 **billing unlock** — “on `main`” ≠ Actions-green.
+
 ---
 
 ## 1. Core pattern (product)
@@ -17,8 +27,9 @@ Haven2 latch; QUANTUM + ζ spectrum as **audit**, not physics theatre.
 | Purpose → Cost → Risk → Authority → Audit | Algorithm (and peer) scan axes — [ALGORITHM_GOVERNANCE_MAIN.md](ALGORITHM_GOVERNANCE_MAIN.md) |
 | Sealed ALLOW | No side effect without gate ALLOW; check ≠ execute |
 | Latch | Haven2 closed latch **BLOCKs** `control` / `3dm` only — not algorithm / query / mail / calendar / social |
+| `solver_ok` | Gates **3dm/control solvers only** (`ALLOW` and latch open **or** `action=="query"`); comment matches code ([PR #6](https://github.com/Damien157/governance-engine/pull/6)) |
 | QUANTUM line | Fixed 150-char fused audit encoding — **not** a quantum computer |
-| ζ spectrum | Finite Haven2 Dirichlet summaries (`Z_E`, `Z_R`, `Z_C`, `Z_H`) — honesty rules in [SPECTRAL_AUDIT_FIXES.md](SPECTRAL_AUDIT_FIXES.md) |
+| ζ spectrum | Completeness keys `Z_E` / `Z_R` / `Z_C` / `Z_H` — [SPECTRAL_AUDIT_FIXES.md](SPECTRAL_AUDIT_FIXES.md); `Z_D` additive only (not in `SPECTRUM_KEYS`) |
 
 Buyer one-pager: [PRODUCT_SLICE.md](PRODUCT_SLICE.md).  
 Hosted HTTP: [HOSTED_CHECK_API.md](HOSTED_CHECK_API.md) · ops: [CUSTOMER_OPS.md](CUSTOMER_OPS.md) · threats: [THREAT_MODEL.md](THREAT_MODEL.md).
@@ -32,76 +43,86 @@ Hosted HTTP: [HOSTED_CHECK_API.md](HOSTED_CHECK_API.md) · ops: [CUSTOMER_OPS.md
 | `GovernedStack.govern` | Shared Authority + Audit (ops → HAIS → Haven2 → optional QP/3DM) |
 | `GovernedActionBus` | In-process mutations: `require_allow` before `side_effect` |
 | `GovernedMail` / `GovernedCalendar` / `GovernedPost` | Outbound channel gates |
-| `GovernedAlgorithm` | Algorithm run/deploy **decide-only** (Purpose→Cost→Risk) |
+| `GovernedAlgorithm` | Algorithm run/deploy **decide-only** |
 | `HavenUnified` / `GovernedUnified` | Thin front door |
-| `GovernedDecisionEngine` | decide adapter (constitution/halt → govern) |
-| `sidecar` `POST /v1/check` | Hosted **check-only** HTTP; **no** `/v1/execute` |
-| QUANTUM + `spectral_audit` | Attach audit line + spectrum (FIX 1–4 honesty) |
+| `sidecar` `POST /v1/check` | Hosted **check-only**; **no** `/v1/execute` |
+| QUANTUM + `spectral_audit` | Audit line + spectrum (FIX 1–4 honesty) |
+| `audit_projection.project_governance_score` | **AUDIT-ONLY** shadow scores — **not** on the decision path |
 
-Sketches (3SAT demo, topology, fluids, production pipeline sketch, …) remain
-importable for demos and are **never** consulted for ALLOW / BLOCK / REVIEW.
-See README three-tier table and `governed_stack.catalog`.
+Sketches remain importable for demos and are **never** consulted for ALLOW / BLOCK / REVIEW.
 
 ---
 
-## 3. What we built / landed this arc
+## 3. Integrity stack on `main` (customer-facing + Haven2)
 
-| Item | Where | Status |
-|------|--------|--------|
-| Algorithm Governance Main charter + gate | `docs/ALGORITHM_GOVERNANCE_MAIN.md`, `GovernedAlgorithm` | Live |
-| QUANTUM line (10 fields, 150 chars, T1–T3 placeholders) | `quantum_line.py`, docs | Live audit |
-| Haven2 ζ beside QUANTUM on algorithm envelope | `spectral_audit.py`, stack attach | Live |
-| Spectrum honesty FIX 1–4 | sigma nest, complete `Z_*`, bad `c`, `zeta_error` | Live + exercises |
-| `scripts/spectral_fix_exercises.py` | main `b88d892` | Live verification harness |
-| `scripts/unified_useful_test.py` | algorithm ALLOW + control latch BLOCK smoke | Live |
-| Hosted check API algorithm channel | `sidecar` `/v1/check` `channel:algorithm` | Live (`c80f836`) |
-| Bug→fix log discipline | [BUGFIXES.md](BUGFIXES.md) | Ongoing |
-| `require_persisted_key` missing-PEM refuse | LocalPEM + sidecar | **PR #1** `dea893c` (merge when ready) |
+| # | Item | Commit / PR | Verification label |
+|---|------|-------------|-------------------|
+| FIX 1–4 | Spectrum honesty (sigma nest, complete `Z_*`, bad `c`, `zeta_error`) | `b88d892` + exercises | **Verified** (session suite / source) |
+| 5 | `require_persisted_key` missing PEM refuse | `81a4ad8` #1 | **Verified** (live + pytest + diff) |
+| 6–8 | Multi-tenant shared PEM refuse, `compare_digest`, `preflight_stacks` | `d72800c` #2 | **Verified** (diff + tests) |
+| 9 | Haven2 `switch_times` 0-based; `history_p_hat` seed removed at `EnergyState` (no leftover `zeta_summaries` `[1:]`) | `db1ac42` #3 | **Verified** (source + no double-fix) |
+| — | `governed_delta` / `Z_D` (additive audit, not integrity) | `c04ecef` #4 | **Reported** / reframed |
+| 10 | Customer-edge HTTP tests + API-key timing residual note | `97cea1b` #5 | **Reported** local green |
+| — | THREAT_MODEL: `crypto_factory` + multi-process audit residuals; `solver_ok` comment | `a09271f` #6 | **Verified** (docs/comment; A/C closed) |
+| — | Latch VERIFY honesty + hosted check contract + smoke | `c1dce42` #8 | **Reported** (honesty wording + smoke 8/8) |
+| — | Hosted-check eval on live sidecar + ActionBus | `286fcb0` #9 | **Reported** (10/10 local) |
+| — | Audit-only `project_governance_score` + eval 12 + unit tests | `a6ce977` #10 | **Verified** once Damien reviewed real source + `rg` (audit-only); local 12/12 **reported** |
 
----
+Open integrity questions **A/B/C** from the review trail:
 
-## 4. Verified behavior (do not re-litigate)
-
-- Algorithm / query can **ALLOW** with `haven2.open: false`; latch BLOCK is for `control` / `3dm`.
-- Live algorithm check: decision + quantum + spectrum; completeness `|Z_E|+Z_R+Z_C ≈ Z_H` when available.
-- Happy-path curl alone does **not** prove FIX 1 (default sigma); use spectral exercises A–D.
-- **One** `zeta_summaries` on `Haven2Engine`; `float(vols[i])` / equity / forecast live in `Haven2Engine.run` / `step`, **not** in `GovernedStack.govern`.
-- Sidecar: TenantRegistry duplicate API keys → `ValueError` at construct; `resolve` fail-closed; RateLimiter sliding window; `check_async` requires non-empty body `token`.
-- Auth + rate-limit are **wired**: `do_POST` `/v1/*` → `_authorize_v1` → resolve / API key → rate limit → `check`.
-- `/v1/execute` → 405 (library ActionBus only).
-- CI red on GitHub: Damien157 **billing lock** (jobs never start) — not suite failure. Local pytest green for touched suites.
+| Q | Resolution |
+|---|------------|
+| **A** `crypto_factory` bypass | Real hook, **no in-tree callers**; accepted residual in THREAT_MODEL (#6) |
+| **B** `anomaly_signal` | Nested **dict** from CGE analytics — `or {}` is correct; not a falsy-float bug |
+| **C** `solver_ok` comment | Narrowed to match code (#6); no speculative exemption widening |
 
 ---
 
-## 5. Integrity finding → fix (customer-facing keys)
+## 4. Hosted check / eval (buyer-facing)
 
-**Bug:** `GOVERNANCE_REQUIRE_PERSISTED_KEY=1` looked like production posture, but sidecar did `pass` then built `CryptoEngine` without the flag; LocalPEM only refused `path=None`, so a **missing PEM still auto-generated** (audit continuity break). Injected crypto meant GovernedStack config could not save you.
+| Artifact | Role |
+|----------|------|
+| [HOSTED_CHECK_API.md](HOSTED_CHECK_API.md) | Customer contract: auth, channels, slim vs algorithm, `GOV_*`, no execute |
+| `scripts/hosted_check_smoke.py` | Thin operator smoke (8 cases) |
+| `scripts/hosted_check_eval.py` | Live HTTP + ActionBus matrix + optional projection attach |
+| `governed_stack/audit_projection.py` | `(risk, stability, governance)` from envelope — **after** decision; never imported by `stack` / `sidecar` / `action_bus` |
 
-**Fix (PR #1):** LocalPEM raises `FileNotFoundError` under require + missing file; sidecar passes `require_persisted_key`; `rotate()` still intentionally creates after backup.
-
----
-
-## 6. Queued bug→fix (future PRs)
-
-| # | Bug | Intended fix | Severity |
-|---|-----|----------------|----------|
-| 1 | API-key / master-key compares use `==` | **Fixed** — `hmac.compare_digest` | Defense-in-depth |
-| 2 | Multi-tenant falls back to **shared default PEM** when per-tenant key missing | **Fixed** — refuse fallback under REQUIRE=1; failure-path tests | Integrity / isolation |
-| 3 | Lazy tenant stack build under REQUIRE=1 | **Fixed** — `preflight_stacks()` at registry construct | Ops fail-fast |
+`GOV_*` codes: `GOV_INTENT_INVALID`, `GOV_AUTH_FAILED`, `GOV_POLICY_BLOCK`, `GOV_POLICY_REVIEW`, `GOV_HAIS_CAP`, `GOV_LATCH_CLOSED`, `GOV_RATE_LIMIT`, `GOV_INTERNAL`.
 
 ---
 
-## 7. Product / roadmap gaps (not code bugs)
+## 5. Accepted residuals ([THREAT_MODEL.md](THREAT_MODEL.md))
 
-1. Production deploy — public host, TLS, managed tenants beyond lite API keys.
-2. Real joule / energy meter — beyond declarative `energy_cost` strings.
-3. Repeatable Control **ALLOW** smoke with open latch + QP path.
-4. AtomSafeguard Soft/Hard productization beyond charter docs.
-5. Unlock GitHub Actions billing → re-run CI on main and PR #1.
-6. Deeper customer-edge verification still worth scripted cases: JWT missing → `GOV_AUTH_FAILED`, malformed/unknown/execute refuses, slim vs enriched response shape (leak / omit errors).
+- Multi-tenant API-key `dict.get` (not `compare_digest`) — accepted
+- Injected `crypto_factory` / `crypto=` skips LocalPEM require — accepted (no in-tree callers)
+- Multi-process audit writers unsupported — accepted (in-process soak only)
+- TransistorLatch hysteresis while `|p̂|` large — intentional
+- Projection: `GOV_LATCH_CLOSED` floors risk ≥ 0.9 **and** +0.2 governance — by design (“safety engaged”); not a gate input
 
-Roadmap narrative: [FULL_GOVERNANCE_ROADMAP.md](FULL_GOVERNANCE_ROADMAP.md).  
-Operational conjectures (not Clay P vs NP): [NVNP_CONJECTURES.md](NVNP_CONJECTURES.md).
+---
+
+## 6. Research lane (not product value)
+
+| Item | Status |
+|------|--------|
+| [LATCH_CERTIFICATE.md](LATCH_CERTIFICATE.md) | VERIFY = determinism framing; SEARCH open; honesty caveats landed (#8); not Clay / not NP-complete |
+| [NVNP_CONJECTURES.md](NVNP_CONJECTURES.md) | Operational conjectures only |
+| Brute-force SEARCH cost vs `T` | Parked — would not prove hardness |
+
+Prefer hosted-check / domain app over further spectrum toys for economic value.
+
+---
+
+## 7. Product / roadmap gaps (still open)
+
+1. Unlock GitHub Actions billing → re-run CI on `main` (e.g. `gh run rerun 34711886574`).
+2. Production deploy — TLS, public host, managed tenants beyond lite keys.
+3. Real joule / energy meter beyond declarative `energy_cost`.
+4. Repeatable Control **ALLOW** smoke with open latch + QP.
+5. Soft/Hard productization beyond charter docs.
+6. Optional: more eval fixtures for rate-limit / REVIEW / HAIS_CAP **live** (today partly synthetic in projection tests).
+
+Roadmap: [FULL_GOVERNANCE_ROADMAP.md](FULL_GOVERNANCE_ROADMAP.md).
 
 ---
 
@@ -111,28 +132,21 @@ Operational conjectures (not Clay P vs NP): [NVNP_CONJECTURES.md](NVNP_CONJECTUR
 cd /workspace/governance-engine
 source .venv/bin/activate
 
-# Live useful smoke (algorithm + spectrum expectations)
 .venv/bin/python scripts/unified_useful_test.py
-
-# Spectrum honesty FIX 1–4
 .venv/bin/python scripts/spectral_fix_exercises.py
-
-# Key / sidecar integrity (after PR #1 branch)
-.venv/bin/python -m pytest tests/test_key_providers.py \
-  tests/test_sidecar.py::TestSidecarRequirePersistedKey -q
-
-# Hosted check (check-only)
-.venv/bin/python scripts/run_sidecar.py
-# then POST /v1/check with channel=algorithm + body JWT (+ X-API-Key if set)
+.venv/bin/python scripts/hosted_check_smoke.py
+.venv/bin/python scripts/hosted_check_eval.py
+.venv/bin/python -m unittest tests.test_audit_projection -v
+.venv/bin/python -m pytest tests/test_sidecar.py haven2/tests/test_switch_time_p_hat_align.py \
+  haven2/tests/test_governed_delta.py -q
 ```
 
 ---
 
 ## 9. Valuation stance (honest)
 
-Closer to **real architecture with unverified customer-edge integrity** than
-“production-ready SaaS.” Path from belief to solid: merge PR #1, burn down
-§6 integrity queue, script §7 edge cases, unlock CI, then deploy/TLS.
+Integrity queue for keys / latch / spectrum honesty is **largely closed on `main`**.
+Customer edge has contract + smoke + live eval; audit projection is a **shadow**, not a product SKU.
+Still closer to **solid prototype / operable gate** than production SaaS until CI unlocks and deploy/TLS land.
 
-What this is **not:** P vs NP proof, consciousness product, quantum computer,
-or a remote execute API.
+**Not:** P vs NP proof, consciousness product, quantum computer, or remote execute API.
