@@ -186,3 +186,88 @@ def test_probe_uses_reject_union_and_nested_payload():
         }
     )
     assert not SidecarService._bio_shaped_probe({"action": "ping", "payload": {"note": "hi"}})
+
+
+def test_bio_review_enqueue_and_resolve(tmp_path):
+    """Bio overlay REVIEW must hit pending queue; approve + voucher → ALLOW."""
+    import os
+    from certified_governance_unified import CryptoEngine
+    from governed_stack.stack import GovernedStack
+
+    db = tmp_path / "bio_review.db"
+    key = tmp_path / "signing_key.pem"
+    crypto = CryptoEngine(private_key_path=None)
+    stack = GovernedStack(
+        config={"db_path": str(db), "signing_key_path": str(key), "log_level": 40},
+        crypto=crypto,
+    )
+    bio = GovernedBio(stack=stack)
+    first = bio.check_sync(
+        purpose="in vivo aging intervention metadata",
+        domain="aging",
+        intervention_class="in_vivo_declared",
+        irreversible=True,
+    )
+    assert first["decision"] == "REVIEW"
+    assert first["error_code"] == "GOV_BIO_REVIEW"
+    assert first.get("review_enqueued") is True
+    pending = bio.list_pending_reviews()
+    assert len(pending) >= 1
+    assert pending[0]["entry_id"] == first["entry_id"]
+
+    resolution = bio.resolve_review(
+        first["entry_id"],
+        resolved_by="damien",
+        approve=True,
+        notes="literature-shaped declared class OK for this check",
+    )
+    assert resolution.get("final_decision") == "ALLOW"
+    assert resolution.get("approval_voucher")
+    assert len(bio.list_pending_reviews()) == 0
+
+    second = bio.check_sync(
+        purpose="in vivo aging intervention metadata",
+        domain="aging",
+        intervention_class="in_vivo_declared",
+        irreversible=True,
+        approval_voucher=resolution["approval_voucher"],
+    )
+    assert second["decision"] == "ALLOW"
+    assert second.get("voucher_honored") is True
+
+
+def test_bio_hard_block_not_unblocked_by_authority_or_role():
+    """Event horizon: pathogen_work stays BLOCK across authority metadata."""
+    for role in ("user", "admin", "operator", "pi"):
+        r = classify_bio(
+            purpose="declared pathogen work",
+            domain="disease",
+            intervention_class="pathogen_work",
+            authority_role=role,
+        )
+        assert r.decision == "BLOCK", role
+        assert r.error_code == "GOV_BIO_DUAL_USE"
+
+
+def test_bio_hard_block_survives_check_sync_roles(tmp_path):
+    from certified_governance_unified import CryptoEngine
+    from governed_stack.stack import GovernedStack
+
+    db = tmp_path / "bio_block.db"
+    key = tmp_path / "k.pem"
+    stack = GovernedStack(
+        config={"db_path": str(db), "signing_key_path": str(key), "log_level": 40},
+        crypto=CryptoEngine(private_key_path=None),
+    )
+    bio = GovernedBio(stack=stack)
+    for role in ("user", "admin", "operator"):
+        r = bio.check_sync(
+            purpose="declared pathogen work",
+            domain="disease",
+            intervention_class="pathogen_work",
+            authority_role="pi",
+            user="damien",
+            role=role,
+        )
+        assert r["decision"] == "BLOCK", role
+        assert r["error_code"] == "GOV_BIO_DUAL_USE"

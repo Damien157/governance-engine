@@ -69,7 +69,8 @@ Bypass / override keys (sealed backdoors) → `GOV_INTENT_INVALID`:
 
 - **Probe markers are structural, not semantic.** `_bio_shaped_probe` trips on field *names* (`purpose`+`domain`+`intervention_class`), `BIO_SCAN_REJECT_KEYS`, or bio `action` values — including one level of nested `payload`. Free-text synonym dodge on `raw` without those keys can miss the gravity well; accepted limitation until a semantic classifier exists.
 - **Authority / token unblock coverage is thin.** Current test is `classify_bio(..., pathogen_work, authority_role="pi") → BLOCK` only — not a full proof over JWT/role/stack combinations.
-- **REVIEW has no timeout / auto-promotion.** Each check is stateless; unresolved REVIEW holds as REVIEW on re-check until inputs change or a human resolves outside the gate (never delayed ALLOW).
+- **REVIEW resolve path (now wired):** bio-overlay REVIEW enqueues the audit `entry_id` into `review_queue` even when the stack logged ALLOW. Human resolve via `GovernedBio.resolve_review` / `POST /v1/review/resolve` → approve issues an exact-intent voucher; deny records BLOCK trail. Re-check with `approval_voucher` honors ALLOW for that intent; bio HARD BLOCK still wins over vouchers. Decision cache is skipped when a voucher is present.
+- **REVIEW has no timeout / auto-promotion.** Unresolved PENDING items do not expire or become ALLOW by waiting (never delayed ALLOW). Operational queue risk if humans stall — still accepted residual.
 - **`_bio_shaped_probe` sits on `channel=raw` after JSON→dict and before `stack.govern`.** It does not sit after BioScanIntent. The `channel=bio` path uses `_reject_forbidden_scan_keys` + Pydantic instead.
 
 ## Code

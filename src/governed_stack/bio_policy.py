@@ -202,8 +202,52 @@ def tighten_decision(
     return sd, reasons, None
 
 
+
+def apply_bio_voucher_honor(
+    *,
+    approval_voucher: object,
+    stack_decision: str,
+    policy: BioPolicyResult,
+    env_reasons: Optional[Sequence[str]],
+    decision: str,
+    bio_reasons: List[str],
+    bio_code: Optional[str],
+) -> tuple:
+    """Single source of truth for bio overlay + human approval voucher.
+
+    Never loosens HARD BLOCK. Only suppresses overlay REVIEW when the stack
+    ALLOWed via ``human_review:approved_via_voucher:*`` reasons.
+    """
+    if not approval_voucher:
+        return decision, list(bio_reasons), bio_code, False
+    if stack_decision != "ALLOW" or policy.decision == "BLOCK":
+        return decision, list(bio_reasons), bio_code, False
+    reasons = list(env_reasons or [])
+    if not any(str(r).startswith("human_review:approved_via_voucher:") for r in reasons):
+        return decision, list(bio_reasons), bio_code, False
+    out_reasons = list(bio_reasons) + ["bio_policy:human_review_voucher_honored"]
+    return "ALLOW", out_reasons, None, True
+
+
+def enqueue_bio_overlay_review(engine: object, entry_id: object) -> bool:
+    """Enqueue audit entry for human REVIEW after bio overlay tightens to REVIEW.
+
+    Raises RuntimeError if the engine cannot queue — silent skip would recreate
+    soft-ALLOW-by-frustration (REVIEW returned, queue empty).
+    """
+    if not entry_id:
+        raise ValueError("entry_id required to enqueue bio REVIEW")
+    if engine is None or not hasattr(engine, "enqueue_pending_review"):
+        raise RuntimeError(
+            "bio REVIEW enqueue unavailable: engine lacks enqueue_pending_review"
+        )
+    return bool(engine.enqueue_pending_review(str(entry_id)))
+
+
 __all__ = [
     "ALLOW_CLASSES",
+    "apply_bio_voucher_honor",
+    "enqueue_bio_overlay_review",
     "BioPolicyResult",
     "HARD_BLOCK_CLASSES",
     "REVIEW_CLASSES",
