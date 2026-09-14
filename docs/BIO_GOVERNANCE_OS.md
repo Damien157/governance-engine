@@ -79,3 +79,4 @@ Bypass / override keys (sealed backdoors) → `GOV_INTENT_INVALID`:
 - `src/governed_stack/contracts.py` — `BioScanIntent` / `validate_bio_scan`
 - `tests/test_bio_governance.py`
 - `scripts/bio_governance_smoke.py`
+- Review log: [AUDIT_TRAIL.md](AUDIT_TRAIL.md) (PR #13 entry)

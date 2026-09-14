@@ -792,6 +792,7 @@ class SidecarService:
             layers.append(nested)
         for layer in layers:
             keys = layer.keys()
+            # dict_keys supports & with frozenset natively (no set() copy needed).
             if keys & BIO_SCAN_REJECT_KEYS:
                 return True
             if {"purpose", "domain", "intervention_class"}.issubset(keys):
