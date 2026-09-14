@@ -66,6 +66,33 @@ MAIL_SCAN_FORBIDDEN = frozenset({"to", "cc", "bcc", "from"})
 CALENDAR_SCAN_FORBIDDEN = frozenset({"attendees", "start", "end"})
 SOCIAL_SCAN_FORBIDDEN = frozenset({"handles", "urls", "recipients"})
 ALGORITHM_SCAN_FORBIDDEN = frozenset({"private_key", "password", "token", "secret"})
+BIO_SCAN_FORBIDDEN = frozenset({
+    "sequence",
+    "fasta",
+    "genome",
+    "oligo",
+    "oligos",
+    "plasmid",
+    "primer",
+    "primers",
+    "primer_list",
+    "synthesis_order",
+    "protocol",
+    "protocol_steps",
+    "gene_drive_construct",
+    "select_agent_id",
+    "pathogen_stock",
+})
+# Override / skip keys — sealed backdoors (never silent-allow).
+BIO_BYPASS_FORBIDDEN = frozenset({
+    "force_allow",
+    "bypass",
+    "skip_policy",
+    "skip_bio_policy",
+    "policy_override",
+    "override_decision",
+})
+BIO_SCAN_REJECT_KEYS = BIO_SCAN_FORBIDDEN | BIO_BYPASS_FORBIDDEN
 
 
 def _reject_forbidden_scan_keys(
@@ -565,6 +592,53 @@ def parse_intent(raw: dict) -> GovernIntent:
         ) from exc
 
 
+def validate_bio_scan(
+    *,
+    purpose: str,
+    domain: str,
+    intervention_class: str,
+    summary: str = "",
+    subject_scope: str = "",
+    risk_notes: str = "",
+    authority_role: str = "",
+    irreversible: bool = False,
+    human_subjects: bool = False,
+    dual_use_flag: bool = False,
+) -> BioScanIntent:
+    """Build/validate BioScanIntent; raises IntentValidationError on bad/forbidden."""
+    if not isinstance(purpose, str) or not purpose.strip():
+        raise IntentValidationError(
+            "bio purpose required",
+            errors=[{"loc": ["bio", "purpose"], "msg": "purpose required", "type": "missing"}],
+        )
+    if not isinstance(domain, str) or not domain.strip():
+        raise IntentValidationError(
+            "bio domain required",
+            errors=[{"loc": ["bio", "domain"], "msg": "domain required", "type": "missing"}],
+        )
+    if not isinstance(intervention_class, str) or not intervention_class.strip():
+        raise IntentValidationError(
+            "bio intervention_class required",
+            errors=[{"loc": ["bio", "intervention_class"], "msg": "intervention_class required", "type": "missing"}],
+        )
+    try:
+        return BioScanIntent.from_scan(
+            purpose=purpose.strip(),
+            domain=domain.strip(),
+            intervention_class=intervention_class.strip(),
+            summary=summary or "",
+            subject_scope=subject_scope or "",
+            risk_notes=risk_notes or "",
+            authority_role=authority_role or "",
+            irreversible=bool(irreversible),
+            human_subjects=bool(human_subjects),
+            dual_use_flag=bool(dual_use_flag),
+        )
+    except ValidationError as exc:
+        raise IntentValidationError(str(exc), errors=exc.errors()) from exc
+
+
+
 def validate_mail_scan(subject: str, body: str, **kwargs: Any) -> MailScanIntent:
     """Build + validate a MailScanIntent; raises IntentValidationError."""
     _reject_forbidden_scan_keys(kwargs, MAIL_SCAN_FORBIDDEN, where="mail")
@@ -620,6 +694,155 @@ def validate_social_scan(
         ) from exc
 
 
+
+class BioScanPayload(BaseModel):
+    """Scanned bio fields — high-level purpose/risk only; no sequences/protocols."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    subject: str = ""
+    text: str = ""
+
+
+class BioScanIntent(GovernIntent):
+    """Biology / aging / disease intent scan; wet-lab payloads forbidden."""
+
+    action: str = "bio_govern"
+    purpose: str = ""
+    domain: str = ""
+    intervention_class: str = ""
+    summary: str = ""
+    subject_scope: str = ""
+    risk_notes: str = ""
+    authority_role: str = ""
+    irreversible: bool = False
+    human_subjects: bool = False
+    dual_use_flag: bool = False
+    payload: Optional[BioScanPayload] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_bio_payloads(cls, data: Any) -> Any:
+        _reject_forbidden_scan_keys(data, BIO_SCAN_REJECT_KEYS, where="bio")
+        return data
+
+    @classmethod
+    def _compose_scan_text(
+        cls,
+        *,
+        domain: str,
+        intervention_class: str,
+        summary: str,
+        subject_scope: str,
+        risk_notes: str,
+        authority_role: str,
+        irreversible: bool,
+        human_subjects: bool,
+        dual_use_flag: bool,
+    ) -> str:
+        parts: List[str] = []
+        if summary:
+            parts.append(summary)
+        parts.append(f"domain={domain}")
+        parts.append(f"intervention_class={intervention_class}")
+        if subject_scope:
+            parts.append(f"subject_scope={subject_scope}")
+        if risk_notes:
+            parts.append(f"risk: {risk_notes}")
+        if authority_role:
+            parts.append(f"authority_role={authority_role}")
+        parts.append(f"irreversible={bool(irreversible)}")
+        parts.append(f"human_subjects={bool(human_subjects)}")
+        parts.append(f"dual_use_flag={bool(dual_use_flag)}")
+        return "\n".join(parts)
+
+    @classmethod
+    def from_scan(
+        cls,
+        *,
+        purpose: str,
+        domain: str,
+        intervention_class: str,
+        summary: str = "",
+        subject_scope: str = "",
+        risk_notes: str = "",
+        authority_role: str = "",
+        irreversible: bool = False,
+        human_subjects: bool = False,
+        dual_use_flag: bool = False,
+        **kwargs: Any,
+    ) -> "BioScanIntent":
+        text = cls._compose_scan_text(
+            domain=domain,
+            intervention_class=intervention_class,
+            summary=summary,
+            subject_scope=subject_scope,
+            risk_notes=risk_notes,
+            authority_role=authority_role,
+            irreversible=irreversible,
+            human_subjects=human_subjects,
+            dual_use_flag=dual_use_flag,
+        )
+        return cls(
+            action="bio_govern",
+            purpose=purpose,
+            domain=domain,
+            intervention_class=intervention_class,
+            summary=summary,
+            subject_scope=subject_scope,
+            risk_notes=risk_notes or "",
+            authority_role=authority_role or "",
+            irreversible=bool(irreversible),
+            human_subjects=bool(human_subjects),
+            dual_use_flag=bool(dual_use_flag),
+            payload=BioScanPayload(subject=purpose, text=text),
+            **kwargs,
+        )
+
+    def dump_for_govern(self) -> Dict[str, Any]:
+        text = self._compose_scan_text(
+            domain=self.domain,
+            intervention_class=self.intervention_class,
+            summary=self.summary,
+            subject_scope=self.subject_scope,
+            risk_notes=self.risk_notes,
+            authority_role=self.authority_role,
+            irreversible=self.irreversible,
+            human_subjects=self.human_subjects,
+            dual_use_flag=self.dual_use_flag,
+        )
+        data = self.model_dump(
+            mode="python",
+            exclude_none=True,
+            exclude={
+                "purpose",
+                "domain",
+                "intervention_class",
+                "summary",
+                "subject_scope",
+                "risk_notes",
+                "authority_role",
+                "irreversible",
+                "human_subjects",
+                "dual_use_flag",
+            },
+        )
+        data["action"] = "bio_govern"
+        data["payload"] = {"subject": self.purpose, "text": text}
+        # Keep typed fields for bio adapters / policy re-read
+        data["purpose"] = self.purpose
+        data["domain"] = self.domain
+        data["intervention_class"] = self.intervention_class
+        data["summary"] = self.summary
+        data["subject_scope"] = self.subject_scope
+        data["risk_notes"] = self.risk_notes
+        data["authority_role"] = self.authority_role
+        data["irreversible"] = self.irreversible
+        data["human_subjects"] = self.human_subjects
+        data["dual_use_flag"] = self.dual_use_flag
+        return data
+
+
 def validate_algorithm_scan(
     *,
     purpose: str,
@@ -656,7 +879,7 @@ def validate_algorithm_scan(
 
 def intent_to_govern_dict(intent: Union[GovernIntent, dict, BaseModel]) -> Dict[str, Any]:
     """Normalize BaseModel / channel intent / dict to a govern() dict."""
-    if isinstance(intent, (MailScanIntent, CalendarScanIntent, SocialScanIntent, AlgorithmScanIntent)):
+    if isinstance(intent, (MailScanIntent, CalendarScanIntent, SocialScanIntent, AlgorithmScanIntent, BioScanIntent)):
         return intent.dump_for_govern()
     if isinstance(intent, GovernIntent):
         return intent.model_dump(mode="python", exclude_none=True)
@@ -801,6 +1024,7 @@ __all__ = [
     "validate_calendar_scan",
     "validate_social_scan",
     "validate_algorithm_scan",
+    "validate_bio_scan",
     "intent_to_govern_dict",
     "normalize_envelope",
     "map_error_code",

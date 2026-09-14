@@ -123,7 +123,8 @@ Prefer hosted-check / domain app over further spectrum toys for economic value.
 6. Optional: more eval fixtures for rate-limit / REVIEW / HAIS_CAP **live** (today partly synthetic in projection tests).
 
 Roadmap: [FULL_GOVERNANCE_ROADMAP.md](FULL_GOVERNANCE_ROADMAP.md).  
-Cost-to-recreate (live vs R&D): [COST_TO_RECREATE.md](COST_TO_RECREATE.md).
+Cost-to-recreate (live vs R&D): [COST_TO_RECREATE.md](COST_TO_RECREATE.md).  
+BioGovernance OS (check-only): [BIO_GOVERNANCE_OS.md](BIO_GOVERNANCE_OS.md).
 
 ---
 

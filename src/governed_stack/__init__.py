@@ -17,6 +17,8 @@ from .action_bus import (
 )
 from .algorithm import AlgorithmBlocked, GovernedAlgorithm
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
+from .bio import BioBlocked, GovernedBio
+from .bio import intent_for_scan as bio_intent_for_scan
 from .calendar import CalendarBlocked, GovernedCalendar
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .catalog import TIERS, catalog_snapshot, describe, import_check, live_ok
@@ -30,6 +32,7 @@ from .contracts import (
     GOV_POLICY_REVIEW,
     GOV_RATE_LIMIT,
     AlgorithmScanIntent,
+    BioScanIntent,
     CalendarScanIntent,
     DecisionEnvelope,
     ErrorCode,
@@ -83,6 +86,8 @@ __all__ = [
     "GovernedCalendar",
     "GovernedPost",
     "GovernedAlgorithm",
+    "GovernedBio",
+    "BioBlocked",
     "attach_quantum",
     "attach_spectrum",
     "build_spectrum",
