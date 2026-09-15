@@ -6,7 +6,7 @@ GovernedActionBus: mutation facade — require_allow before any side_effect (no 
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 
 from .action_bus import (
@@ -22,6 +22,19 @@ from .bio import intent_for_scan as bio_intent_for_scan
 from .calendar import CalendarBlocked, GovernedCalendar
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .catalog import TIERS, catalog_snapshot, describe, import_check, live_ok
+from .connectors import (
+    CalendarWriter,
+    MailSender,
+    MockBioTicketLogger,
+    MockCalendarWriter,
+    MockMailSender,
+    MockSocialPublisher,
+    SocialPublisher,
+    bus_bio_side_effect,
+    bus_calendar_side_effect,
+    bus_mail_side_effect,
+    bus_social_side_effect,
+)
 from .contracts import (
     GOV_AUTH_FAILED,
     GOV_HAIS_CAP,
@@ -55,7 +68,6 @@ from .key_providers import (
 )
 from .mail import GovernedMail, SendBlocked, intent_for_scan
 from .observability import DecisionMetrics, structured_log
-from .runtime_bridge import GovernedDecisionEngine
 from .quantum_line import (
     attach_quantum,
     build_quantum_state,
@@ -63,8 +75,7 @@ from .quantum_line import (
     encode_quantum_line,
     quantum_from_hais_envelope,
 )
-from .spectral_audit import attach_spectrum, build_spectrum
-
+from .runtime_bridge import GovernedDecisionEngine
 from .sidecar import (
     RateLimiter,
     SidecarService,
@@ -76,12 +87,24 @@ from .sidecar import (
 )
 from .social import GovernedOutboundText, GovernedPost, PostBlocked
 from .social import intent_for_scan as social_intent_for_scan
+from .spectral_audit import attach_spectrum, build_spectrum
 from .stack import GovernedStack, ensure_import_paths
 from .unified import GovernedUnified, HavenUnified
 
 __all__ = [
     "GovernedStack",
     "GovernedActionBus",
+    "MailSender",
+    "CalendarWriter",
+    "SocialPublisher",
+    "MockMailSender",
+    "MockCalendarWriter",
+    "MockSocialPublisher",
+    "MockBioTicketLogger",
+    "bus_mail_side_effect",
+    "bus_calendar_side_effect",
+    "bus_social_side_effect",
+    "bus_bio_side_effect",
     "GovernedMail",
     "GovernedCalendar",
     "GovernedPost",
@@ -111,6 +134,7 @@ __all__ = [
     "calendar_intent_for_scan",
     "social_intent_for_scan",
     "algorithm_intent_for_scan",
+    "bio_intent_for_scan",
     "TIERS",
     "describe",
     "import_check",
@@ -138,6 +162,7 @@ __all__ = [
     "CalendarScanIntent",
     "SocialScanIntent",
     "AlgorithmScanIntent",
+    "BioScanIntent",
     "DecisionEnvelope",
     "parse_intent",
     "validate_mail_scan",

@@ -4,11 +4,13 @@ require_allow / channel check before any side_effect callback runs.
 
 Kills the pattern of “check optional, send anyway.”
 
-Channels: mail | calendar | social | tool
+Channels: mail | calendar | social | tool | bio
   - mail/calendar/social: delegate to GovernedMail / GovernedCalendar / GovernedPost
     require_allow (recipients/attendees/URLs stay out of band).
   - tool: raw GovernIntent via parse_intent / stack.govern; still no side_effect
     without ALLOW.
+  - bio: GovernedBio.require_allow (check-only policy). side_effect on ALLOW is
+    metadata / ticket logging only — never wet-lab, sequences, or protocols.
 
 Mutations raise SendBlocked (alias ActionDenied) on BLOCK/REVIEW — callers
 cannot ignore a soft deny.
@@ -24,6 +26,7 @@ import concurrent.futures
 import inspect
 from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Union
 
+from .bio import GovernedBio
 from .calendar import GovernedCalendar
 from .contracts import IntentValidationError, intent_invalid_envelope, parse_intent
 from .mail import GovernedMail, SendBlocked
@@ -35,7 +38,7 @@ ensure_import_paths()
 # Alias: same PermissionError subclass for all mutation denials.
 ActionDenied = SendBlocked
 
-CHANNELS: FrozenSet[str] = frozenset({"mail", "calendar", "social", "tool"})
+CHANNELS: FrozenSet[str] = frozenset({"mail", "calendar", "social", "tool", "bio"})
 
 SideEffect = Callable[[dict], Any]
 
@@ -73,6 +76,7 @@ class GovernedActionBus:
         mail: Optional[GovernedMail] = None,
         calendar: Optional[GovernedCalendar] = None,
         post: Optional[GovernedPost] = None,
+        bio: Optional[GovernedBio] = None,
     ) -> None:
         if stack is not None:
             self.stack = stack
@@ -82,6 +86,8 @@ class GovernedActionBus:
             self.stack = calendar.stack
         elif post is not None:
             self.stack = post.stack
+        elif bio is not None:
+            self.stack = bio.stack
         else:
             # Shared default stack via mail adapter (persists under artifacts/mail).
             mail = GovernedMail()
@@ -92,6 +98,7 @@ class GovernedActionBus:
             calendar if calendar is not None else GovernedCalendar(stack=self.stack)
         )
         self._post = post if post is not None else GovernedPost(stack=self.stack)
+        self._bio = bio if bio is not None else GovernedBio(stack=self.stack)
 
     @property
     def mail(self) -> GovernedMail:
@@ -104,6 +111,10 @@ class GovernedActionBus:
     @property
     def post(self) -> GovernedPost:
         return self._post
+
+    @property
+    def bio(self) -> GovernedBio:
+        return self._bio
 
     def issue_token(self, user: str, role: str = "user") -> str:
         return self.stack.issue_token(user, role)
@@ -135,6 +146,17 @@ class GovernedActionBus:
         urls: Any = None,
         # tool
         intent: Optional[Dict[str, Any]] = None,
+        # bio
+        purpose: str = "",
+        domain: str = "",
+        intervention_class: str = "",
+        subject_scope: str = "",
+        risk_notes: str = "",
+        authority_role: str = "",
+        irreversible: bool = False,
+        human_subjects: bool = False,
+        dual_use_flag: bool = False,
+        approval_voucher: Optional[str] = None,
     ) -> dict:
         """
         Gate then mutate.
@@ -142,6 +164,9 @@ class GovernedActionBus:
         Runs the channel's require_allow / govern check. Only if decision is
         ALLOW is ``side_effect(result)`` invoked. BLOCK and REVIEW raise
         ``SendBlocked`` (``ActionDenied``) so the side effect never runs.
+
+        Bio side_effects must be metadata / ticket mocks only — never
+        sequences, protocols, or wet-lab execution.
         """
         if channel not in CHANNELS:
             raise ValueError(
@@ -180,6 +205,27 @@ class GovernedActionBus:
                 urls=urls,
                 user=user,
                 role=role,
+            )
+        elif channel == "bio":
+            if not purpose or not domain or not intervention_class:
+                raise TypeError(
+                    "bio channel requires keyword arguments "
+                    "'purpose', 'domain', and 'intervention_class'"
+                )
+            result = await self._bio.require_allow(
+                purpose=purpose,
+                domain=domain,
+                intervention_class=intervention_class,
+                summary=summary or subject or body,
+                subject_scope=subject_scope,
+                risk_notes=risk_notes,
+                authority_role=authority_role,
+                irreversible=irreversible,
+                human_subjects=human_subjects,
+                dual_use_flag=dual_use_flag,
+                user=user,
+                role=role,
+                approval_voucher=approval_voucher,
             )
         else:  # tool
             result = await self._check_tool(
@@ -275,6 +321,16 @@ class GovernedActionBus:
         recipients: Any = None,
         urls: Any = None,
         intent: Optional[Dict[str, Any]] = None,
+        purpose: str = "",
+        domain: str = "",
+        intervention_class: str = "",
+        subject_scope: str = "",
+        risk_notes: str = "",
+        authority_role: str = "",
+        irreversible: bool = False,
+        human_subjects: bool = False,
+        dual_use_flag: bool = False,
+        approval_voucher: Optional[str] = None,
     ) -> dict:
         """Sync wrapper around ``execute``."""
 
@@ -300,6 +356,16 @@ class GovernedActionBus:
                 recipients=recipients,
                 urls=urls,
                 intent=intent,
+                purpose=purpose,
+                domain=domain,
+                intervention_class=intervention_class,
+                subject_scope=subject_scope,
+                risk_notes=risk_notes,
+                authority_role=authority_role,
+                irreversible=irreversible,
+                human_subjects=human_subjects,
+                dual_use_flag=dual_use_flag,
+                approval_voucher=approval_voucher,
             )
         )
 

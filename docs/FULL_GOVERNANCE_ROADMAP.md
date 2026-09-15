@@ -1,6 +1,7 @@
 # Full governance system — roadmap
 
-Milestone **0.5.0**: **Governed action bus — no bypass**.
+Milestone **0.6.0**: **Live-connector enforcement + no-bypass lint + bio on
+action bus**.
 
 HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
 
@@ -13,18 +14,23 @@ HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
    (`POST /v1/check`); `POST /v1/execute` is refused — no remote arbitrary
    side effects. Library bus only for mutations.
 
-## Next (toward “full”)
+2. **Live connector enforcement (0.6.0 — done)** — Protocols + mocks +
+   `bus_*_side_effect` factories in `governed_stack.connectors`; real SDK/MCP
+   writes allowed **only** inside bus side_effects. Agent constitution:
+   [`AGENT_MANDATES.md`](AGENT_MANDATES.md). CI: `scripts/lint_no_bypass.py`
+   (AST/scan) wired in `ci_local.sh` and `.github/workflows/ci.yml`. Bio channel
+   on the bus (`bio`) via `GovernedBio.require_allow`; side_effect =
+   metadata/ticket mock only (no wet-lab / sequences / protocols).
 
-2. **Live connector enforcement** — wire real Gmail / Calendar / social MCP
-   or SDK calls *only* as `side_effect` callbacks registered through the bus;
-   agent rules + CI lint that forbid direct connector sends.
+## Remaining (toward “full”)
 
-3. **CI gates** — keep ruff/mypy on `src/governed_stack`; add bus coverage to
-   the all-works suite; optional import-linter / AST check that outbound
-   send symbols are only referenced from bus side_effects / tests.
+3. **CI gates (partially done)** — ruff/mypy + no-bypass lint + bus/bio coverage
+   in the all-works suite. Optional: import-linter / stronger symbol graph that
+   outbound send symbols are only reachable from bus side_effects.
 
 4. **Tool / agent govern** — expand `tool` channel + agent runtimes so every
-   tool call is an intent through the bus (no “check optional, act anyway”).
+   tool call is an intent through the bus (no “check optional, act anyway”);
+   wire agent hosts to `AGENT_MANDATES.md` by default.
 
 5. **Hard tenancy / KMS** — beyond multi-tenant lite: real KMS/HSM providers,
    stronger isolation, quotas, and operator SSO (not claimed today).
@@ -34,3 +40,4 @@ HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
 - Not a full SaaS product, SLA, or formal CA.
 - Not sketches on the decision path.
 - Sidecar never becomes a remote code-exec / send proxy.
+- Bio never executes wet-lab work or returns protocols/sequences.

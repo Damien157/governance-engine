@@ -277,15 +277,15 @@ def build_spectrum(
 
 
 def attach_spectrum(
-    result: MutableMapping[str, Any],
+    result: dict[str, Any],
     env: Optional[Mapping[str, Any]] = None,
     *,
     engine: Any = None,
     sigma: float = DEFAULT_SIGMA,
-) -> MutableMapping[str, Any]:
+) -> dict[str, Any]:
     """Attach ``result['spectrum']`` from govern envelope / Haven2 engine.
 
-    Mutates and returns ``result``. Safe when spectrum is unavailable —
+    Mutates and returns ``result`` as a dict. Safe when spectrum is unavailable —
     keys are present with ``None`` and an explicit ``reason``.
     """
     # Prefer explicit env; else reuse fields already copied onto the result.
@@ -300,7 +300,7 @@ def attach_spectrum(
     # If caller passed engine=None but result came from a stack-backed gate,
     # they should pass engine explicitly; we do not invent one.
     result["spectrum"] = build_spectrum(base, engine=engine, sigma=sigma)
-    return result
+    return result  # typed as dict[str, Any]
 
 
 __all__ = [

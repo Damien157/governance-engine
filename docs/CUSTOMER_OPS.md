@@ -1,7 +1,7 @@
 # Customer operations — governed request gate
 
 Honest prototype → **operable service shape**. Customer-ops on the live gate
-(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**; audit chain race fix in **0.4.3**; bug→fix pass in **0.4.4**; **governed action bus** in **0.5.0**). Not a full SaaS product yet.
+(multi-tenant lite + rate limits in **0.4.1**; concurrent audit soak + threat model in **0.4.2**; audit chain race fix in **0.4.3**; bug→fix pass in **0.4.4**; **governed action bus** in **0.5.0**; **live-connector enforcement + bio on bus** in **0.6.0**). Not a full SaaS product yet.
 
 ## What this is
 
@@ -47,7 +47,7 @@ set -a && source /tmp/customer.env && set +a
 
 ```bash
 curl -s http://127.0.0.1:8080/health
-# {"status":"ok","version":"0.5.0"}
+# {"status":"ok","version":"0.6.0"}
 
 curl -s http://127.0.0.1:8080/ready
 # 200 {"status":"ready","reasons":[]}  — or 503 with reasons
@@ -93,12 +93,12 @@ Optional: `POST /v1/review/list` lists pending REVIEW rows (same engine as CLI).
 ### Optional Docker
 
 ```bash
-docker build -t governed-sidecar:0.5.0 .
+docker build -t governed-sidecar:0.6.0 .
 docker run --rm -p 8080:8080 \
   -e GOVERNANCE_REQUIRE_PERSISTED_KEY=1 \
   -e GOVERNANCE_API_KEY=... \
   -v "$PWD/artifacts/customer:/app/artifacts/customer" \
-  governed-sidecar:0.5.0
+  governed-sidecar:0.6.0
 ```
 
 Tests do **not** require Docker.
@@ -233,4 +233,4 @@ Concurrent audit soak (CI): `tests/test_audit_soak.py` (manual: `scripts/audit_s
 
 ## Version
 
-Package **0.5.0** (`governed_stack.__version__`) — governed action bus (no bypass). Prior: 0.4.4 bug→fix pass. Roadmap: [`FULL_GOVERNANCE_ROADMAP.md`](FULL_GOVERNANCE_ROADMAP.md).
+Package **0.6.0** (`governed_stack.__version__`) — live-connector enforcement, no-bypass lint, bio on action bus. Prior: 0.5.0 action bus. Roadmap: [`FULL_GOVERNANCE_ROADMAP.md`](FULL_GOVERNANCE_ROADMAP.md).

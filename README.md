@@ -2,13 +2,15 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.5.0` (governed action bus — no bypass; CI gates **ruff** + **mypy** on `src/governed_stack`).
+**Package version:** `0.6.0` (live-connector enforcement + no-bypass lint + bio on action bus; CI gates **no-bypass** + **ruff** + **mypy** on `src/governed_stack`).
 
 **Unified useful map (this arc):** [`docs/UNIFIED_USEFUL.md`](docs/UNIFIED_USEFUL.md) — live path, verified behavior, integrity fixes, queued bug→fix, roadmap gaps.
 
 **Bug→fix log:** [`docs/BUGFIXES.md`](docs/BUGFIXES.md) (0.4.4 latch BLOCK, scan routing reject, clamped Re default, PositionCBF HOCBF; plus 0.4.3 audit chain race).
 
-**Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (action bus → connectors → CI → tool/agent → tenancy/KMS).
+**Agent mandates:** [`docs/AGENT_MANDATES.md`](docs/AGENT_MANDATES.md) — bus-only connectors; bio REVIEW contract.
+
+**Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (0.6.0 connectors + no-bypass lint + bio on bus; remaining: tool/agent deepen, tenancy/KMS).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social/algorithm adapters.
 
@@ -24,6 +26,8 @@ This is **not** a P vs NP proof, a theory of everything, AGI, a formal certifica
 | **live** | `GovernedCalendar` | `src/governed_stack/calendar.py` | **Yes** — calendar write gate |
 | **live** | `GovernedPost` | `src/governed_stack/social.py` | **Yes** — outbound social/post gate |
 | **live** | `GovernedAlgorithm` | `src/governed_stack/algorithm.py` | **Yes** — algorithm run/deploy gate (Purpose→Cost→Risk) |
+| **live** | `GovernedBio` | `src/governed_stack/bio.py` | **Yes** — bio intent gate (check-only) |
+| **live** | `connectors` | `src/governed_stack/connectors.py` | **Yes** — bus side_effect factories (mocks for tests) |
 | **live** | `HavenUnified` | `src/governed_stack/unified.py` | **Yes** — thin facade |
 | **live** | `GovernedDecisionEngine` | `src/governed_stack/runtime_bridge.py` | **Yes** — decide adapter (constitution/halt → govern) |
 | **core** | `ZKEnhancedGovernanceEngine` (unified v1.1) | `certified_governance_unified.py` | Yes (preferred ops layer; `crypto=`) |
