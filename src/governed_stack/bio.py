@@ -16,8 +16,13 @@ import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .bio_policy import classify_bio, tighten_decision
-from .contracts import validate_bio_scan
+from .bio_policy import (
+    apply_bio_voucher_honor,
+    classify_bio,
+    enqueue_bio_overlay_review,
+    tighten_decision,
+)
+from .contracts import BIO_VOUCHER_TTL_DEFAULT, validate_bio_scan
 from .mail import SendBlocked
 from .stack import GovernedStack, ensure_import_paths
 
@@ -116,6 +121,7 @@ class GovernedBio:
         dual_use_flag: bool = False,
         user: str = "damien",
         role: str = "user",
+        approval_voucher: Optional[str] = None,
     ) -> dict:
         intent = intent_for_scan(
             purpose=purpose,
@@ -141,9 +147,31 @@ class GovernedBio:
             dual_use_flag=dual_use_flag,
         )
         token = self.issue_token(user, role)
-        env = await self.stack.govern(intent, token)
+        govern_opts = {}
+        if approval_voucher:
+            govern_opts["approval_voucher"] = approval_voucher
+        env = await self.stack.govern(intent, token, **govern_opts)
         stack_decision = str(env.get("decision", "BLOCK"))
         decision, bio_reasons, bio_code = tighten_decision(stack_decision, policy)
+
+        decision, bio_reasons, bio_code, voucher_honored = apply_bio_voucher_honor(
+            approval_voucher=approval_voucher,
+            stack_decision=stack_decision,
+            policy=policy,
+            env_reasons=env.get("reasons"),
+            decision=decision,
+            bio_reasons=bio_reasons,
+            bio_code=bio_code,
+        )
+
+        # Overlay REVIEW on an ALLOW audit row never hit review_queue — enqueue.
+        entry_id = env.get("entry_id")
+        queued = False
+        if decision == "REVIEW" and entry_id:
+            queued = enqueue_bio_overlay_review(
+                getattr(self.stack, "engine", None), entry_id
+            )
+
         ok = decision == "ALLOW"
         merged_reasons = list(env.get("reasons") or [])
         for r in bio_reasons:
@@ -153,7 +181,7 @@ class GovernedBio:
             "ok": ok,
             "decision": decision,
             "reasons": merged_reasons,
-            "entry_id": env.get("entry_id"),
+            "entry_id": entry_id,
             "hais": env.get("hais"),
             "haven2": env.get("haven2"),
             "purpose": purpose,
@@ -168,6 +196,8 @@ class GovernedBio:
             "bio_policy": policy.as_dict(),
             "blocked_run": not ok,
             "error_code": bio_code or env.get("error_code"),
+            "review_enqueued": queued,
+            "voucher_honored": voucher_honored,
         }
         return result
 
@@ -199,6 +229,41 @@ class GovernedBio:
             return asyncio.run(_run())
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, _run()).result()
+
+
+    def list_pending_reviews(self, limit: int = 50) -> list:
+        """Pending human REVIEW items (including bio-overlay enqueued)."""
+        eng = getattr(self.stack, "engine", None)
+        if eng is None or not hasattr(eng, "list_pending_reviews"):
+            return []
+        return list(eng.list_pending_reviews(limit=limit))
+
+    def resolve_review(
+        self,
+        entry_id: str,
+        *,
+        resolved_by: str,
+        approve: bool,
+        notes: str = "",
+        voucher_ttl_seconds: int = BIO_VOUCHER_TTL_DEFAULT,
+    ) -> dict:
+        """Human resolve of a pending REVIEW. Approve → voucher; deny → BLOCK trail.
+
+        Does not execute wet-lab work. Caller must re-check with the voucher
+        (same intent) for ALLOW. HARD BLOCK bio classes remain blocked even
+        with a voucher.
+        """
+        eng = getattr(self.stack, "engine", None)
+        if eng is None or not hasattr(eng, "resolve_review"):
+            raise RuntimeError("review resolve unavailable on this stack engine")
+        return eng.resolve_review(
+            entry_id,
+            resolved_by=resolved_by,
+            approve=approve,
+            notes=notes,
+            voucher_ttl_seconds=voucher_ttl_seconds,
+        )
+
 
 
 __all__ = ["GovernedBio", "BioBlocked", "SendBlocked", "intent_for_scan"]

@@ -8,6 +8,38 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+
+## feat/bio-review-resolve-auth — REVIEW resolve + authority probes (open)
+
+| Field | Value |
+|-------|--------|
+| Branch | `feat/bio-review-resolve-auth` |
+| Depends on | PR #13 on `main` |
+| Local suite | `tests/test_bio_governance.py` **16/16 PASS** |
+
+### What this adds
+
+- `enqueue_pending_review(entry_id)` on audit storage/engine — bio overlay REVIEW can enter the pending queue when stack logged ALLOW
+- `GovernedBio.list_pending_reviews` / `resolve_review`; `approval_voucher` on `check`
+- Stack forwards `approval_voucher` into `execute_governed_action`
+- Sidecar `POST /v1/review/resolve` + bio channel voucher/enqueue fields
+- Decision **cache bypass** when `approval_voucher` present (otherwise voucher ALLOW was masked as empty-reason cache hit)
+- Authority probes: `pathogen_work` stays BLOCK across `authority_role` + JWT `role` variants
+
+### Caller contract for REVIEW
+
+1. `check` → `REVIEW` + `entry_id` (+ `review_enqueued`)
+2. Stop side effects; escalate to human (`require_allow` raises)
+3. Human `resolve_review(approve=True|False)`
+4. If approve: re-`check` **same intent** with `approval_voucher`
+5. Never treat bare `REVIEW` as soft-ALLOW
+
+### Accepted residuals (unchanged)
+
+- Semantic free-text dodge on raw
+- Full JWT/stack gaming matrix still thin (role probes added; not exhaustive)
+- No REVIEW timeout / SLA
+
 ## PR #13 — BioGovernance OS (check-only)
 
 | Field | Value |

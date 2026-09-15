@@ -93,6 +93,8 @@ BIO_BYPASS_FORBIDDEN = frozenset({
     "override_decision",
 })
 BIO_SCAN_REJECT_KEYS = BIO_SCAN_FORBIDDEN | BIO_BYPASS_FORBIDDEN
+# Default TTL for human REVIEW approval vouchers (bio + sidecar).
+BIO_VOUCHER_TTL_DEFAULT = 3600
 
 
 def _reject_forbidden_scan_keys(

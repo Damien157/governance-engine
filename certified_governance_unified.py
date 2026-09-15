@@ -627,6 +627,34 @@ class AuditStorage:
             self._last_ts = ts
         return entry_id
 
+    def enqueue_pending_review(self, entry_id: str) -> bool:
+        """Queue an existing audit entry for human REVIEW if not already queued.
+
+        Used when a channel overlay (e.g. bio_policy) tightens stack ALLOW → REVIEW
+        after the audit row was already written as ALLOW. Idempotent.
+        Returns True if newly enqueued, False if already present.
+        """
+        if not entry_id:
+            raise ValueError("entry_id required")
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT id FROM audit_log WHERE id = ?", (entry_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"no audit entry for entry_id={entry_id}")
+        existing = cur.execute(
+            "SELECT status FROM review_queue WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+        if existing is not None:
+            return False
+        import time as _time
+        cur.execute(
+            "INSERT INTO review_queue (entry_id, status, created_at) VALUES (?, 'PENDING', ?)",
+            (entry_id, _time.time()),
+        )
+        self.conn.commit()
+        return True
+
     def list_pending_reviews(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
         List REVIEW-decisions awaiting human resolution, oldest first.
@@ -1827,10 +1855,17 @@ class CertifiedGovernanceEngine:
             # not only in the next request.
             circuit_state = self.breaker.state.value
 
-            # Cache (user-aware)
+            # Cache (user-aware). Never serve a cached decision when a human
+            # approval voucher is present — the voucher path must run so
+            # policy_reasons carry human_review:approved_via_voucher:* and
+            # channel overlays (e.g. bio) can honor the resolve.
             cache_key = self._cache_key(user_id, intent)
             cached = await self.cache.get(cache_key)
-            cache_hit = cached is not None and not user_rate_exceeded
+            cache_hit = (
+                cached is not None
+                and not user_rate_exceeded
+                and voucher_claims is None
+            )
 
             if cache_hit:
                 result = cached
@@ -2210,6 +2245,10 @@ class CertifiedGovernanceEngine:
     # ------------------------------------------------------------------
     # Public stats
     # ------------------------------------------------------------------
+
+    def enqueue_pending_review(self, entry_id: str) -> bool:
+        """Queue an audit entry for human REVIEW (channel overlay path)."""
+        return self.storage.enqueue_pending_review(entry_id)
 
     def list_pending_reviews(self, limit: int = 50) -> List[Dict[str, Any]]:
         """List REVIEW-decisions awaiting human resolution, oldest first."""

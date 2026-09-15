@@ -257,6 +257,9 @@ class GovernedStack:
         if type(self.engine).__name__ == "ZKEnhancedGovernanceEngine":
             ops_kwargs["generate_proofs"] = generate_proofs
             ops_kwargs["proof_mode"] = proof_mode
+        # Human REVIEW voucher (from resolve_review) — exact-intent ALLOW short-circuit.
+        if opts.get("approval_voucher"):
+            ops_kwargs["approval_voucher"] = opts["approval_voucher"]
 
         ops = await self.engine.execute_governed_action(intent, token, **ops_kwargs)
 

@@ -30,11 +30,17 @@ from urllib.parse import parse_qs, urlparse
 
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .bio import intent_for_scan as bio_intent_for_scan
-from .bio_policy import classify_bio, tighten_decision
+from .bio_policy import (
+    apply_bio_voucher_honor,
+    classify_bio,
+    enqueue_bio_overlay_review,
+    tighten_decision,
+)
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .contracts import (
     ALGORITHM_SCAN_FORBIDDEN,
     BIO_SCAN_REJECT_KEYS,
+    BIO_VOUCHER_TTL_DEFAULT,
     GOV_INTENT_INVALID,
     GOV_RATE_LIMIT,
     IntentValidationError,
@@ -658,7 +664,11 @@ class SidecarService:
                     "latency_ms": 0.0,
                     "entry_id": None,
                 }
-            env = await self.stack.govern(intent, token)
+            voucher = body.get("approval_voucher")
+            govern_opts = {}
+            if isinstance(voucher, str) and voucher.strip():
+                govern_opts["approval_voucher"] = voucher.strip()
+            env = await self.stack.govern(intent, token, **govern_opts)
             policy = classify_bio(
                 purpose=str(body.get("purpose") or ""),
                 domain=str(body.get("domain") or ""),
@@ -670,9 +680,23 @@ class SidecarService:
                 human_subjects=bool(body.get("human_subjects") or False),
                 dual_use_flag=bool(body.get("dual_use_flag") or False),
             )
-            decision, bio_reasons, bio_code = tighten_decision(
-                str(env.get("decision", "BLOCK")), policy
+            stack_decision = str(env.get("decision", "BLOCK"))
+            decision, bio_reasons, bio_code = tighten_decision(stack_decision, policy)
+            decision, bio_reasons, bio_code, voucher_honored = apply_bio_voucher_honor(
+                approval_voucher=govern_opts.get("approval_voucher"),
+                stack_decision=stack_decision,
+                policy=policy,
+                env_reasons=env.get("reasons"),
+                decision=decision,
+                bio_reasons=bio_reasons,
+                bio_code=bio_code,
             )
+            entry_id = env.get("entry_id")
+            queued = False
+            if decision == "REVIEW" and entry_id:
+                queued = enqueue_bio_overlay_review(
+                    getattr(self.stack, "engine", None), entry_id
+                )
             slim = self._slim_envelope(env)
             slim["decision"] = decision
             slim["ok"] = decision == "ALLOW"
@@ -686,6 +710,8 @@ class SidecarService:
                 slim["error_code"] = bio_code
             slim["domain"] = str(body.get("domain") or "")
             slim["intervention_class"] = str(body.get("intervention_class") or "")
+            slim["review_enqueued"] = queued
+            slim["voucher_honored"] = voucher_honored
             return slim
 
         elif channel == "algorithm":
@@ -860,6 +886,27 @@ class SidecarService:
         if eng is None or not hasattr(eng, "list_pending_reviews"):
             return []
         return list(eng.list_pending_reviews(limit=limit))
+
+    def resolve_review(
+        self,
+        entry_id: str,
+        *,
+        resolved_by: str,
+        approve: bool,
+        notes: str = "",
+        voucher_ttl_seconds: int = BIO_VOUCHER_TTL_DEFAULT,
+    ) -> Dict[str, Any]:
+        """Human resolve pending REVIEW → audit trail + optional approval voucher."""
+        eng = getattr(self.stack, "engine", None)
+        if eng is None or not hasattr(eng, "resolve_review"):
+            raise RuntimeError("review resolve unavailable on this stack engine")
+        return eng.resolve_review(
+            entry_id,
+            resolved_by=resolved_by,
+            approve=approve,
+            notes=notes,
+            voucher_ttl_seconds=voucher_ttl_seconds,
+        )
 
     def metrics_prometheus(self) -> str:
         if self.registry is not None:
@@ -1055,6 +1102,58 @@ def make_handler(service: SidecarService) -> type:
                     "pending": pending,
                     "count": len(pending),
                 }
+                if tenant_id is not None:
+                    payload["tenant_id"] = tenant_id
+                self._send(200, payload)
+                return
+            if path == "/v1/review/resolve":
+                body, err = self._read_json()
+                if err:
+                    self._send(400, {"error": "bad_request", "reason": err})
+                    return
+                assert body is not None
+                entry_id = str(body.get("entry_id") or "").strip()
+                resolved_by = str(body.get("resolved_by") or "").strip()
+                if not entry_id or not resolved_by:
+                    self._send(
+                        400,
+                        {
+                            "error": "bad_request",
+                            "reason": "entry_id and resolved_by required",
+                        },
+                    )
+                    return
+                if "approve" not in body:
+                    self._send(
+                        400,
+                        {
+                            "error": "bad_request",
+                            "reason": "approve required (true|false)",
+                        },
+                    )
+                    return
+                approve = bool(body.get("approve"))
+                notes = str(body.get("notes") or "")
+                try:
+                    result = tenant_svc.resolve_review(
+                        entry_id,
+                        resolved_by=resolved_by,
+                        approve=approve,
+                        notes=notes,
+                        voucher_ttl_seconds=int(body.get("voucher_ttl_seconds") or BIO_VOUCHER_TTL_DEFAULT),
+                    )
+                except Exception as exc:
+                    self._send(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "review_resolve_failed",
+                            "reason": str(exc),
+                        },
+                    )
+                    return
+                payload = dict(result)
+                payload["ok"] = True
                 if tenant_id is not None:
                     payload["tenant_id"] = tenant_id
                 self._send(200, payload)
