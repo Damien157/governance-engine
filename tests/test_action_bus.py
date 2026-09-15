@@ -196,7 +196,7 @@ class TestActionBus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("PUBLIC_EXECUTE_HELPERS", gs.__all__)
         self.assertTrue(callable(GovernedActionBus.execute))
         self.assertTrue(callable(GovernedActionBus.execute_sync))
-        self.assertEqual(__version__, "0.5.0")
+        self.assertEqual(__version__, "0.6.0")
 
     def test_execute_sync_allow(self):
         bus = self.make_bus()
@@ -215,6 +215,80 @@ class TestActionBus(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(out["decision"], "ALLOW")
         self.assertEqual(calls, [1])
+
+
+    async def test_bio_allow_side_effect_metadata_only(self):
+        """Bio ALLOW runs side_effect (ticket/metadata mock); no protocols."""
+        bus = self.make_bus()
+        calls: list[dict] = []
+
+        def side_effect(result: dict) -> dict:
+            calls.append(result)
+            return {
+                "mock": True,
+                "kind": "bio_metadata_ticket",
+                "entry_id": result.get("entry_id"),
+            }
+
+        out = await bus.execute(
+            "bio",
+            purpose="computational aging biomarker meta-analysis",
+            domain="aging",
+            intervention_class="computational",
+            summary="public summary statistics only",
+            side_effect=side_effect,
+        )
+        self.assertEqual(out["decision"], "ALLOW")
+        self.assertTrue(out.get("executed"))
+        self.assertEqual(out.get("channel"), "bio")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(out["side_effect_result"]["kind"], "bio_metadata_ticket")
+
+    async def test_bio_block_side_effect_never_called(self):
+        bus = self.make_bus()
+        calls: list[dict] = []
+
+        def side_effect(result: dict) -> None:
+            calls.append(result)
+
+        with self.assertRaises(SendBlocked) as ctx:
+            await bus.execute(
+                "bio",
+                purpose="declared pathogen work",
+                domain="disease",
+                intervention_class="pathogen_work",
+                side_effect=side_effect,
+            )
+        self.assertEqual(calls, [])
+        self.assertEqual(ctx.exception.result.get("decision"), "BLOCK")
+
+    async def test_bio_review_side_effect_never_called(self):
+        bus = self.make_bus()
+        calls: list[dict] = []
+
+        def side_effect(result: dict) -> None:
+            calls.append(result)
+
+        with self.assertRaises(SendBlocked) as ctx:
+            await bus.execute(
+                "bio",
+                purpose="trial intent metadata",
+                domain="clinical_support",
+                intervention_class="clinical_trial_declared",
+                human_subjects=True,
+                side_effect=side_effect,
+            )
+        self.assertEqual(calls, [])
+        self.assertEqual(ctx.exception.result.get("decision"), "REVIEW")
+
+    def test_channels_include_bio(self):
+        from governed_stack.action_bus import CHANNELS
+
+        self.assertIn("bio", CHANNELS)
+        self.assertEqual(
+            CHANNELS,
+            frozenset({"mail", "calendar", "social", "tool", "bio"}),
+        )
 
     async def test_unknown_channel_raises(self):
         bus = self.make_bus()

@@ -28,6 +28,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           pip install -r requirements.txt
+      - name: No-bypass lint (connector enforcement)
+        run: |
+          python scripts/lint_no_bypass.py --self-check
+          python scripts/lint_no_bypass.py
       - name: Ruff (governed_stack)
         run: ruff check src/governed_stack
       - name: Mypy (governed_stack)
