@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml (ruff + mypy + all-works tests).
+# Local mirror of .github/workflows/ci.yml (no-bypass lint + ruff + mypy + all-works tests).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -20,6 +20,10 @@ if [[ -x "$ROOT/.venv/bin/mypy" ]]; then
 else
   MYPY=mypy
 fi
+
+echo "==> lint_no_bypass (connector enforcement)"
+"$PY" scripts/lint_no_bypass.py --self-check
+"$PY" scripts/lint_no_bypass.py
 
 echo "==> ruff check src/governed_stack"
 "$RUFF" check src/governed_stack

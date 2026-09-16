@@ -33,6 +33,8 @@ def main() -> int:
         "tests.test_unified",
         "tests.test_governed_stack",
         "tests.test_action_bus",
+        "tests.test_connectors",
+        "tests.test_lint_no_bypass",
         "tests.test_governed_mail",
         "tests.test_governed_calendar",
         "tests.test_governed_social",
