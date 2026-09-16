@@ -8,6 +8,33 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## fix/content-binding-0.6.1 — content-swap seal (open)
+
+| Field | Value |
+|-------|--------|
+| Branch | `fix/content-binding-0.6.1` |
+| Depends on | PR #16 on `main` (0.6.0) |
+| Local suite | `tests/test_connectors.py` + mail/calendar envelope probes |
+
+### What this adds
+
+- Mail `check` / `require_allow` echo **`body`** (and `cc`) on the ALLOW envelope
+- Calendar / social envelopes already carried gated fields; factories now **require** them
+- `bus_mail_side_effect` / `bus_calendar_side_effect` / `bus_social_side_effect` take **only** the connector — no closed-over `body=` / `text=` / `summary=` kwargs (`TypeError` if passed)
+- `ContentBindingError` + `assert_bound_content` — refuse send when envelope lacks approved content
+- Constitution rule **3a** in [AGENT_MANDATES.md](AGENT_MANDATES.md)
+
+### Why before calling 0.6.0 “governed”
+
+Gate could ALLOW body A while a factory closed over body B on the wire. That made “side effects only after ALLOW” false for content. Closed as a live bug, not an accepted residual.
+
+### Accepted residuals
+
+- Mail `cc` still not scanned by policy (routing metadata; echoed for bind only)
+- Custom side_effects outside `bus_*` factories must still call `assert_bound_content` (mandate + helper; not AST-enforced yet)
+- Semantic bio free-text dodge (unchanged)
+
+---
 
 ## feat/bio-review-resolve-auth — REVIEW resolve + authority probes (open)
 

@@ -1,7 +1,8 @@
 # Full governance system — roadmap
 
-Milestone **0.6.0**: **Live-connector enforcement + no-bypass lint + bio on
-action bus**.
+Milestone **0.6.1**: **Content-binding seal** (approved content on envelope;
+factories reject closed-over gated kwargs). Builds on **0.6.0** live-connector
+enforcement + no-bypass lint + bio on action bus.
 
 HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
 
@@ -21,6 +22,10 @@ HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
    (AST/scan) wired in `ci_local.sh` and `.github/workflows/ci.yml`. Bio channel
    on the bus (`bio`) via `GovernedBio.require_allow`; side_effect =
    metadata/ticket mock only (no wet-lab / sequences / protocols).
+
+2a. **Content-binding seal (0.6.1 — done)** — Gate envelopes echo exact approved
+   content; `bus_*_side_effect(connector)` only (no `body=`/`text=` close-over);
+   `ContentBindingError` / `assert_bound_content` for unbound envelopes.
 
 ## Remaining (toward “full”)
 

@@ -1,4 +1,4 @@
-# Agent mandates / constitution (0.6.0)
+# Agent mandates / constitution (0.6.1)
 
 Every bot, channel adapter, and automation that touches outbound side effects
 must obey this constitution. **No bypass.**
@@ -15,6 +15,13 @@ must obey this constitution. **No bypass.**
 3. **Side effects only after ALLOW** — real connector SDKs / MCP write tools
    run **only** inside bus `side_effect` callbacks (see
    `governed_stack.connectors`). Never call them after a soft `ok` glance.
+3a. **Content binding** — gate envelopes carry the **exact approved content**
+   (mail `body`/`subject`/`to`/`cc`; calendar `summary`/`description`/`location`;
+   social `text`/`platform`). `bus_*_side_effect(connector)` takes **only** the
+   connector — no closed-over `body=`/`subject=`/`text=` kwargs. Side effects
+   read gated fields **only** from `result`. Custom side_effects must do the
+   same (`assert_bound_content(result, channel)`). Content-swap is impossible
+   at the factory boundary.
 4. **BLOCK / REVIEW** — raise / refuse (`ActionDenied` / `SendBlocked`). Do not
    send, publish, write calendar, or pretend bio execution. Escalate REVIEW.
 5. **No-bypass lint** — `scripts/lint_no_bypass.py` fails CI if forbidden

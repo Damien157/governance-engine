@@ -6,7 +6,7 @@ GovernedActionBus: mutation facade — require_allow before any side_effect (no 
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 
 from .action_bus import (
@@ -24,12 +24,14 @@ from .calendar import intent_for_scan as calendar_intent_for_scan
 from .catalog import TIERS, catalog_snapshot, describe, import_check, live_ok
 from .connectors import (
     CalendarWriter,
+    ContentBindingError,
     MailSender,
     MockBioTicketLogger,
     MockCalendarWriter,
     MockMailSender,
     MockSocialPublisher,
     SocialPublisher,
+    assert_bound_content,
     bus_bio_side_effect,
     bus_calendar_side_effect,
     bus_mail_side_effect,
@@ -101,6 +103,8 @@ __all__ = [
     "MockCalendarWriter",
     "MockSocialPublisher",
     "MockBioTicketLogger",
+    "ContentBindingError",
+    "assert_bound_content",
     "bus_mail_side_effect",
     "bus_calendar_side_effect",
     "bus_social_side_effect",

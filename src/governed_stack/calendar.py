@@ -130,6 +130,9 @@ class GovernedCalendar:
             "hais": env.get("hais"),
             "haven2": env.get("haven2"),
             "summary": summary,
+            "description": description,
+            "location": location,
+            # attendees/start/end are out-of-band for policy but echoed for send.
             "attendees": attendee_list,
             "start": start,
             "end": end,

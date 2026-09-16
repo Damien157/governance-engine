@@ -1,5 +1,5 @@
 """
-Live-connector enforcement pattern (0.6.0).
+Live-connector enforcement pattern (0.6.1).
 
 Protocols + mocks + factory helpers that produce ``side_effect`` callbacks
 for ``GovernedActionBus.execute``.
@@ -8,12 +8,67 @@ for ``GovernedActionBus.execute``.
 side_effects (or equivalent bus-registered callbacks). Never call Gmail
 ``send_message``, Calendar inserts, or social publish helpers outside the
 bus. See ``scripts/lint_no_bypass.py`` and ``docs/AGENT_MANDATES.md``.
+
+**Content binding (0.6.1):** gate ``check`` / ``require_allow`` results must
+carry the **exact approved content** on the envelope (mail ``body``,
+calendar ``summary``/``description``/``location``, social ``text``).
+``bus_*_side_effect`` factories read **only** from that envelope — they
+reject closed-over content kwargs (``body=``, ``subject=``, ``text=``, …).
+Custom side_effects must likewise use envelope fields only; call
+``assert_bound_content`` for defense-in-depth. Never close over a different
+body/text than the one that was gated.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Protocol, runtime_checkable
+
+
+class ContentBindingError(ValueError):
+    """Raised when a side_effect cannot bind approved content from the envelope.
+
+    Typically: required gated field missing from the gate result, so sending
+    would risk empty/wrong content (content-swap / unbound send).
+    """
+
+
+# Required envelope keys per channel (gated content that must be present).
+_BOUND_CONTENT_KEYS: dict[str, tuple[str, ...]] = {
+    "mail": ("body", "subject", "to"),
+    "calendar": ("summary", "description", "location"),
+    "social": ("text",),
+}
+
+
+def assert_bound_content(result: dict, channel: str) -> None:
+    """Defense-in-depth: require gated content keys on the gate envelope.
+
+    Side_effects and tests may call this before sending. Raises
+    ``ContentBindingError`` if ``channel`` is unknown or a required key is
+    missing (``None``). Empty string is allowed when the gate approved it.
+    """
+    if channel not in _BOUND_CONTENT_KEYS:
+        raise ContentBindingError(
+            f"assert_bound_content: unknown channel {channel!r}; "
+            f"expected one of {sorted(_BOUND_CONTENT_KEYS)}"
+        )
+    missing = [k for k in _BOUND_CONTENT_KEYS[channel] if k not in result or result[k] is None]
+    if missing:
+        raise ContentBindingError(
+            f"gate envelope missing approved content for channel={channel!r}: "
+            f"missing keys {missing}; side_effect must not invent or close over "
+            f"gated fields — re-check so the envelope carries exact approved content"
+        )
+
+
+def _require_envelope_field(result: dict, key: str, *, channel: str) -> Any:
+    if key not in result or result[key] is None:
+        raise ContentBindingError(
+            f"{channel} side_effect: gate envelope missing {key!r}; "
+            f"refusing to send unbound/empty content"
+        )
+    return result[key]
 
 
 @runtime_checkable
@@ -168,81 +223,68 @@ class MockBioTicketLogger:
         return record
 
 
-def bus_mail_side_effect(
-    sender: MailSender,
-    *,
-    to: Any = None,
-    subject: Optional[str] = None,
-    body: Optional[str] = None,
-    cc: Any = None,
-) -> Callable[[dict], Any]:
+def bus_mail_side_effect(sender: MailSender) -> Callable[[dict], Any]:
     """Return a bus ``side_effect`` that sends mail via ``sender`` after ALLOW.
 
-    Optional kwargs close over send fields (gate results omit ``body``).
+    Reads **only** from the gate ``result`` envelope (``to``, ``subject``,
+    ``body``, optional ``cc``). Closed-over content kwargs are rejected by
+    signature — passing ``body=`` / ``subject=`` raises ``TypeError``.
     Real Gmail/SDK calls belong *only* inside ``sender.send`` (invoked here).
     """
 
     def _side_effect(result: dict) -> Any:
+        assert_bound_content(result, "mail")
         return sender.send(
-            to=result.get("to") if to is None else to,
-            subject=(result.get("subject") or "") if subject is None else subject,
-            body=(result.get("body") or "") if body is None else body,
-            cc=result.get("cc") if cc is None else cc,
+            to=_require_envelope_field(result, "to", channel="mail"),
+            subject=_require_envelope_field(result, "subject", channel="mail"),
+            body=_require_envelope_field(result, "body", channel="mail"),
+            cc=result.get("cc"),
             gate_result=result,
         )
 
     return _side_effect
 
 
-def bus_calendar_side_effect(
-    writer: CalendarWriter,
-    *,
-    summary: Optional[str] = None,
-    description: Optional[str] = None,
-    location: Optional[str] = None,
-    start: Any = None,
-    end: Any = None,
-    attendees: Any = None,
-) -> Callable[[dict], Any]:
-    """Return a bus ``side_effect`` that writes calendar via ``writer`` after ALLOW."""
+def bus_calendar_side_effect(writer: CalendarWriter) -> Callable[[dict], Any]:
+    """Return a bus ``side_effect`` that writes calendar via ``writer`` after ALLOW.
 
-    def _side_effect(result: dict) -> Any:
-        return writer.create_event(
-            summary=(result.get("summary") or "") if summary is None else summary,
-            description=(result.get("description") or "")
-            if description is None
-            else description,
-            location=(result.get("location") or "") if location is None else location,
-            start=result.get("start") if start is None else start,
-            end=result.get("end") if end is None else end,
-            attendees=result.get("attendees") if attendees is None else attendees,
-            gate_result=result,
-        )
-
-    return _side_effect
-
-
-def bus_social_side_effect(
-    publisher: SocialPublisher,
-    *,
-    text: Optional[str] = None,
-    platform: Optional[str] = None,
-    recipients: Any = None,
-    urls: Any = None,
-) -> Callable[[dict], Any]:
-    """Return a bus ``side_effect`` that publishes via ``publisher`` after ALLOW.
-
-    Optional kwargs close over publish fields (gate results may omit ``text``).
+    Reads **only** from the gate envelope (``summary``, ``description``,
+    ``location``; plus out-of-band ``start``/``end``/``attendees`` if present).
+    Closed-over content kwargs are rejected by signature.
     """
 
     def _side_effect(result: dict) -> Any:
+        assert_bound_content(result, "calendar")
+        return writer.create_event(
+            summary=_require_envelope_field(result, "summary", channel="calendar"),
+            description=_require_envelope_field(
+                result, "description", channel="calendar"
+            ),
+            location=_require_envelope_field(result, "location", channel="calendar"),
+            start=result.get("start"),
+            end=result.get("end"),
+            attendees=result.get("attendees"),
+            gate_result=result,
+        )
+
+    return _side_effect
+
+
+def bus_social_side_effect(publisher: SocialPublisher) -> Callable[[dict], Any]:
+    """Return a bus ``side_effect`` that publishes via ``publisher`` after ALLOW.
+
+    Reads **only** from the gate envelope (``text``, optional ``platform`` /
+    ``recipients`` / ``urls``). Closed-over ``text=`` overrides are rejected
+    by signature.
+    """
+
+    def _side_effect(result: dict) -> Any:
+        assert_bound_content(result, "social")
         return publisher.publish(
-            text=(result.get("text") or result.get("body") or "")
-            if text is None
-            else text,
-            platform=(result.get("platform") or "") if platform is None else platform,
-            recipients=result.get("recipients") if recipients is None else recipients,
-            urls=result.get("urls") if urls is None else urls,
+            text=_require_envelope_field(result, "text", channel="social"),
+            platform=result.get("platform") or "",
+            recipients=result.get("recipients"),
+            urls=result.get("urls"),
             gate_result=result,
         )
 
@@ -259,6 +301,8 @@ def bus_bio_side_effect(logger: MockBioTicketLogger) -> Callable[[dict], Any]:
 
 
 __all__ = [
+    "ContentBindingError",
+    "assert_bound_content",
     "MailSender",
     "CalendarWriter",
     "SocialPublisher",

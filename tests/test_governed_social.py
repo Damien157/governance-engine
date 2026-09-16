@@ -83,6 +83,10 @@ class TestGovernedPost(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["decision"], "ALLOW")
         self.assertTrue(result["ok"])
         self.assertFalse(result["blocked_publish"])
+        self.assertEqual(
+            result["text"],
+            "Excited to share a short update on our governance stack.",
+        )
         self.assertEqual(result["platform"], "linkedin")
 
     async def test_body_email_blocks(self):

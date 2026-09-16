@@ -2,7 +2,7 @@
 
 A **governed request stack** that composes Damien O’Driscoll’s existing packages without rewriting them.
 
-**Package version:** `0.6.0` (live-connector enforcement + no-bypass lint + bio on action bus; CI gates **no-bypass** + **ruff** + **mypy** on `src/governed_stack`).
+**Package version:** `0.6.1` (content-binding: approved body/text on envelope; connector factories reject closed-over gated content; builds on 0.6.0 connectors + no-bypass + bio bus).
 
 **Unified useful map (this arc):** [`docs/UNIFIED_USEFUL.md`](docs/UNIFIED_USEFUL.md) — live path, verified behavior, integrity fixes, queued bug→fix, roadmap gaps.
 
@@ -10,7 +10,7 @@ A **governed request stack** that composes Damien O’Driscoll’s existing pack
 
 **Agent mandates:** [`docs/AGENT_MANDATES.md`](docs/AGENT_MANDATES.md) — bus-only connectors; bio REVIEW contract.
 
-**Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (0.6.0 connectors + no-bypass lint + bio on bus; remaining: tool/agent deepen, tenancy/KMS).
+**Full-system roadmap:** [`docs/FULL_GOVERNANCE_ROADMAP.md`](docs/FULL_GOVERNANCE_ROADMAP.md) (0.6.1 content-binding; 0.6.0 connectors + no-bypass + bio bus; remaining: tool/agent deepen, tenancy/KMS).
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social/algorithm adapters.
 
