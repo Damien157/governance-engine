@@ -109,8 +109,9 @@ class GovernedMail:
         role: str = "user",
     ) -> dict:
         recipients = _normalize_recipients(to)
-        # cc accepted for API completeness but never enters the scanned intent.
-        _ = cc
+        # cc is routing metadata: never enters the scanned intent, but is
+        # echoed on the envelope so side_effects bind exact approved send.
+        cc_list = _normalize_recipients(cc) if cc is not None else []
         intent = intent_for_scan(subject, body)
         token = self.issue_token(user, role)
         env = await self.stack.govern(intent, token)
@@ -125,6 +126,8 @@ class GovernedMail:
             "haven2": env.get("haven2"),
             "to": recipients,
             "subject": subject,
+            "body": body,
+            "cc": cc_list,
             "blocked_send": not ok,
         }
 

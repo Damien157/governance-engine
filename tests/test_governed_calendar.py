@@ -88,6 +88,8 @@ class TestGovernedCalendar(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["blocked_write"])
         self.assertEqual(result["summary"], "Team sync")
+        self.assertEqual(result["description"], "Weekly project status update")
+        self.assertEqual(result["location"], "Room A")
         self.assertEqual(result["attendees"], ["alice@example.com"])
         self.assertEqual(result["start"], "2026-09-08T10:00:00")
         self.assertEqual(result["end"], "2026-09-08T11:00:00")

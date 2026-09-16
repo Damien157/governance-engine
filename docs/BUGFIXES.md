@@ -8,6 +8,13 @@ No real sends. No GitHub push required for local verification.
 
 Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 
+## 0.6.1 — content-swap seal (envelope binding)
+
+| Bug | Solution |
+|-----|----------|
+| **Content-swap after ALLOW** — `GovernedMail.check` returned `to`/`subject` but **omitted `body`**; `bus_mail_side_effect(..., body=...)` could close over different text than gated. Same class of gap for calendar description/location and social text. | Gate envelopes include exact approved content (`body`; `summary`/`description`/`location`; `text`). Factories are `bus_*_side_effect(connector)` only — closed-over content kwargs raise `TypeError`. Side effects read only from envelope; missing keys → `ContentBindingError`. |
+
+
 ## Integrity — require_persisted_key missing PEM (sidecar / LocalPEM)
 
 | Bug | Solution |

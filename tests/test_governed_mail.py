@@ -86,6 +86,7 @@ class TestGovernedMail(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["blocked_send"])
         self.assertEqual(result["to"], ["alice@example.com"])
         self.assertEqual(result["subject"], "Lunch")
+        self.assertEqual(result["body"], "Are you free tomorrow?")
 
     async def test_body_extra_email_blocks(self):
         mail = self.make_mail()

@@ -121,6 +121,7 @@ class GovernedPost:
             "entry_id": env.get("entry_id"),
             "hais": env.get("hais"),
             "haven2": env.get("haven2"),
+            "text": text,
             "platform": platform or "",
             "recipients": recipient_list,
             "urls": url_list,
