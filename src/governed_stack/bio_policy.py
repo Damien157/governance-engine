@@ -5,6 +5,10 @@ Never executes wet-lab work and never returns protocols or recipes.
 
 Axes: Purpose → Cost → Risk → Authority → Audit (same spine as Algorithm).
 Honesty: not a biosafety officer, not medical advice, not clinical authorization.
+
+This gate is structural-marker-based and does not attempt to catch semantic
+dodges in free-text queries; it catches obviously-structured bio requests and
+enforces the event horizon for named hard-block classes.
 """
 
 from __future__ import annotations

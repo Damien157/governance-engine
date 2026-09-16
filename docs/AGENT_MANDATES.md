@@ -34,6 +34,13 @@ must obey this constitution. **No bypass.**
 | **tool** | Intent through bus `tool` channel; side_effect only on ALLOW | Invalid / BLOCK / REVIEW → refuse |
 | **bio** | Metadata / ticket logging mock only — **no** wet-lab, sequences, protocols, `/v1/execute` | BLOCK → refuse; REVIEW → human `resolve_review` then re-check with voucher (HARD BLOCK still blocked) |
 
+## Bio gate limits (honesty)
+
+This gate is **structural-marker-based** and does not attempt to catch semantic
+dodges in free-text queries; it catches obviously-structured bio requests and
+enforces the event horizon for named hard-block classes. Callers must still
+refuse free-text dual-use how-tos outside the gate.
+
 ## Bio REVIEW resolve contract
 
 1. `GovernedBio.check` / bus `bio` → `REVIEW` enqueues overlay review when needed.
