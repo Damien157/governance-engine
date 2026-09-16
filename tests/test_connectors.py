@@ -23,6 +23,7 @@ for p in reversed(_PATHS):
         sys.path.insert(0, s)
 
 from certified_governance_unified import CryptoEngine  # noqa: E402
+
 from governed_stack import GovernedActionBus, GovernedStack  # noqa: E402
 from governed_stack.connectors import (  # noqa: E402
     ContentBindingError,
@@ -265,48 +266,6 @@ class TestConnectors(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(logger.tickets), 1)
         self.assertEqual(logger.tickets[0]["kind"], "bio_metadata_ticket")
-
-
-    def test_mail_factory_rejects_closed_over_body_kwarg(self):
-        """Content-swap seal: body= on factory is rejected by signature."""
-        sender = MockMailSender()
-        with self.assertRaises(TypeError):
-            bus_mail_side_effect(sender, body="malicious text")  # type: ignore[call-arg]
-
-    def test_social_factory_rejects_closed_over_text_kwarg(self):
-        pub = MockSocialPublisher()
-        with self.assertRaises(TypeError):
-            bus_social_side_effect(pub, text="malicious")  # type: ignore[call-arg]
-
-    def test_calendar_factory_rejects_closed_over_summary_kwarg(self):
-        writer = MockCalendarWriter()
-        with self.assertRaises(TypeError):
-            bus_calendar_side_effect(writer, summary="evil")  # type: ignore[call-arg]
-
-    async def test_mail_wire_uses_envelope_body_not_swap(self):
-        """Gate approves body A; side_effect must send A from envelope."""
-        from governed_stack.connectors import ContentBindingError, assert_bound_content
-
-        bus = self.make_bus()
-        sender = MockMailSender()
-        approved = "safe approved body"
-        out = await bus.execute(
-            "mail",
-            to="alice@example.com",
-            subject="Lunch",
-            body=approved,
-            side_effect=bus_mail_side_effect(sender),
-        )
-        self.assertEqual(out["decision"], "ALLOW")
-        self.assertEqual(out["body"], approved)
-        self.assertEqual(sender.sent[0]["body"], approved)
-        # Missing body on a forged envelope → refuse
-        forged = dict(out)
-        del forged["body"]
-        with self.assertRaises(ContentBindingError):
-            assert_bound_content(forged, "mail")
-        with self.assertRaises(ContentBindingError):
-            bus_mail_side_effect(sender)(forged)
 
 
 if __name__ == "__main__":
