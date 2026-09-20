@@ -23,13 +23,16 @@ So #13–#16 landed **before** the content-swap seal. That was the wrong order r
 
 ---
 
-## fix/content-binding-0.6.1 — content-swap seal (open)
+## PR #17 — content-binding seal 0.6.1 (**Verified**)
 
 | Field | Value |
 |-------|--------|
 | Branch | `fix/content-binding-0.6.1` |
+| URL | https://github.com/Damien157/governance-engine/pull/17 |
+| Merge | **MERGED** to `main` after #13–#16 (see chronology) |
+| Label | **Verified** (source-reviewed; TypeError on closed-over body; envelope bind proven) |
 | Depends on | PR #16 on `main` (0.6.0) |
-| Local suite | `tests/test_connectors.py` + mail/calendar envelope probes |
+| Local suite | `tests/test_connectors.py` + mail/calendar/social/bus envelope probes **PASS** |
 
 ### What this adds
 
@@ -39,7 +42,7 @@ So #13–#16 landed **before** the content-swap seal. That was the wrong order r
 - `ContentBindingError` + `assert_bound_content` — refuse send when envelope lacks approved content
 - Constitution rule **3a** in [AGENT_MANDATES.md](AGENT_MANDATES.md)
 
-### Why before calling 0.6.0 “governed”
+### Threat closed (why this was gate-critical)
 
 Gate could ALLOW body A while a factory closed over body B on the wire. That made “side effects only after ALLOW” false for content. Closed as a live bug, not an accepted residual.
 
