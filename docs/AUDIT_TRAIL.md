@@ -8,31 +8,36 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
-## fix/content-binding-0.6.1 — content-swap seal (open)
+## PR #17 — content-binding seal 0.6.1 (**Verified**)
 
 | Field | Value |
 |-------|--------|
 | Branch | `fix/content-binding-0.6.1` |
+| Commits | `7131686` (seal) · `5fbbc96` (test dedupe) · merge `4c12daf` |
+| URL | https://github.com/Damien157/governance-engine/pull/17 |
 | Depends on | PR #16 on `main` (0.6.0) |
-| Local suite | `tests/test_connectors.py` + mail/calendar envelope probes |
+| Local suite | connector / mail / calendar / social / bus envelope probes **PASS** |
+| Review bar | Source review of envelope keys, factory signatures, `assert_bound_content`, regression suite — not description-only |
+| Label | **Verified** (source-read after merge; residuals accepted) |
 
-### What this adds
+### What landed
 
 - Mail `check` / `require_allow` echo **`body`** (and `cc`) on the ALLOW envelope
-- Calendar / social envelopes already carried gated fields; factories now **require** them
-- `bus_mail_side_effect` / `bus_calendar_side_effect` / `bus_social_side_effect` take **only** the connector — no closed-over `body=` / `text=` / `summary=` kwargs (`TypeError` if passed)
-- `ContentBindingError` + `assert_bound_content` — refuse send when envelope lacks approved content
+- Calendar echoes **`description`** / **`location`** (with `summary`); social echoes **`text`**
+- `bus_*_side_effect(connector)` only — closed-over `body=` / `text=` / `summary=` → `TypeError`
+- `ContentBindingError` + `assert_bound_content` / `_require_envelope_field` — refuse send when required keys missing/`None` (empty string allowed)
 - Constitution rule **3a** in [AGENT_MANDATES.md](AGENT_MANDATES.md)
 
-### Why before calling 0.6.0 “governed”
+### Threat closed
 
-Gate could ALLOW body A while a factory closed over body B on the wire. That made “side effects only after ALLOW” false for content. Closed as a live bug, not an accepted residual.
+Gate could ALLOW body A while a factory closed over body B on the wire. Factory path now: wire bytes = envelope bytes. Binding is **presence + API shape**, not a hash compare of a closed-over value (closed-over content kwargs removed).
 
 ### Accepted residuals
 
-- Mail `cc` still not scanned by policy (routing metadata; echoed for bind only)
+- Mail `cc` echoed but **not scanned** by policy; not in `_BOUND_CONTENT_KEYS`
 - Custom side_effects outside `bus_*` factories must still call `assert_bound_content` (mandate + helper; not AST-enforced yet)
 - Semantic bio free-text dodge (unchanged)
+- Duplicate body asserts in one mail happy-path test (hygiene only)
 
 ---
 
