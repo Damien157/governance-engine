@@ -8,6 +8,21 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## Chronology note (order vs bar)
+
+Ideal bar: seal gate-to-wire **before** shipping constitution/bus claims.
+
+Actual trunk order:
+
+1. **PR #13** — BioGovernance OS (check-only) — on `main` first  
+2. **PR #14** — bio REVIEW queue + shared voucher honor — on `main`  
+3. **PR #16** — full governance 0.6.0 (connectors, no-bypass lint, bio on bus, AGENT_MANDATES) — on `main`  
+4. **PR #17** — content-binding seal 0.6.1 — on `main` **after** #13–#16  
+
+So #13–#16 landed **before** the content-swap seal. That was the wrong order relative to the review bar; **#17 closes the hole** those PRs' claims needed. Treat #17 as **Verified** (source-reviewed). Treat #13 / #14 / #16 as on `main` with review status as listed below — constitution claims are only honest **with** #17 on the same trunk.
+
+---
+
 ## fix/content-binding-0.6.1 — content-swap seal (open)
 
 | Field | Value |
@@ -67,6 +82,33 @@ Gate could ALLOW body A while a factory closed over body B on the wire. That mad
 - Full JWT/stack gaming matrix still thin (role probes added; not exhaustive)
 - No REVIEW timeout / SLA
 
+
+## PR #16 — Full governance 0.6.0 (**Verified** for bus/lint/mandates; see chronology)
+
+| Field | Value |
+|-------|--------|
+| URL | https://github.com/Damien157/governance-engine/pull/16 |
+| Merge | Before PR #17 content-binding seal |
+| Label | **Verified** (source packet reviewed in chat: connectors, lint_no_bypass, bio bus call site, AGENT_MANDATES) |
+| Note | Gate-to-wire honesty for mail/social/calendar content requires **#17** on the same trunk |
+
+### What landed
+
+- `connectors.py` + `bus_*_side_effect` factories; no-bypass AST lint in CI
+- Bio channel on `GovernedActionBus`; AGENT_MANDATES constitution
+- Structural-marker honesty line (bio / mandates)
+
+---
+
+## PR #14 — Bio REVIEW queue + voucher honor (**Reported** → treat as on `main`)
+
+| Field | Value |
+|-------|--------|
+| URL | https://github.com/Damien157/governance-engine/pull/14 |
+| Label | **Reported** / source-adjacent (voucher honor + enqueue path; full JWT matrix still thin) |
+| Merge | Before PR #17 |
+
+---
 ## PR #13 — BioGovernance OS (check-only)
 
 | Field | Value |
