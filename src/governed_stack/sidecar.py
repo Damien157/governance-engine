@@ -30,9 +30,9 @@ from urllib.parse import parse_qs, urlparse
 
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .bio import intent_for_scan as bio_intent_for_scan
+from .bio_semantic import classify_bio_with_semantic
 from .bio_policy import (
     apply_bio_voucher_honor,
-    classify_bio,
     enqueue_bio_overlay_review,
     tighten_decision,
 )
@@ -669,12 +669,13 @@ class SidecarService:
             if isinstance(voucher, str) and voucher.strip():
                 govern_opts["approval_voucher"] = voucher.strip()
             env = await self.stack.govern(intent, token, **govern_opts)
-            policy = classify_bio(
+            policy, semantic = classify_bio_with_semantic(
                 purpose=str(body.get("purpose") or ""),
                 domain=str(body.get("domain") or ""),
                 intervention_class=str(body.get("intervention_class") or ""),
                 summary=str(body.get("summary") or ""),
                 risk_notes=str(body.get("risk_notes") or ""),
+                subject_scope=str(body.get("subject_scope") or ""),
                 authority_role=str(body.get("authority_role") or ""),
                 irreversible=bool(body.get("irreversible") or False),
                 human_subjects=bool(body.get("human_subjects") or False),
@@ -706,6 +707,7 @@ class SidecarService:
                     reasons.append(r)
             slim["reasons"] = reasons
             slim["bio_policy"] = policy.as_dict()
+            slim["bio_semantic"] = semantic.as_dict()
             if bio_code:
                 slim["error_code"] = bio_code
             slim["domain"] = str(body.get("domain") or "")

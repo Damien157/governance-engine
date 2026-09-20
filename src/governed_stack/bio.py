@@ -18,10 +18,10 @@ from typing import Any, Dict, Optional
 
 from .bio_policy import (
     apply_bio_voucher_honor,
-    classify_bio,
     enqueue_bio_overlay_review,
     tighten_decision,
 )
+from .bio_semantic import classify_bio_with_semantic
 from .contracts import BIO_VOUCHER_TTL_DEFAULT, validate_bio_scan
 from .mail import SendBlocked
 from .stack import GovernedStack, ensure_import_paths
@@ -135,12 +135,13 @@ class GovernedBio:
             human_subjects=human_subjects,
             dual_use_flag=dual_use_flag,
         )
-        policy = classify_bio(
+        policy, semantic = classify_bio_with_semantic(
             purpose=purpose,
             domain=domain,
             intervention_class=intervention_class,
             summary=summary,
             risk_notes=risk_notes,
+            subject_scope=subject_scope,
             authority_role=authority_role,
             irreversible=irreversible,
             human_subjects=human_subjects,
@@ -194,6 +195,7 @@ class GovernedBio:
             "human_subjects": bool(human_subjects),
             "dual_use_flag": bool(dual_use_flag),
             "bio_policy": policy.as_dict(),
+            "bio_semantic": semantic.as_dict(),
             "blocked_run": not ok,
             "error_code": bio_code or env.get("error_code"),
             "review_enqueued": queued,

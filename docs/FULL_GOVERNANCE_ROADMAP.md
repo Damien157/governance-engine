@@ -1,6 +1,6 @@
 # Full governance system — roadmap
 
-Milestone **0.6.1**: **Content-binding seal** (approved content on envelope;
+Milestone **0.6.2**: semantic bio stub. Builds on **0.6.1**: **Content-binding seal** (approved content on envelope;
 factories reject closed-over gated kwargs). Builds on **0.6.0** live-connector
 enforcement + no-bypass lint + bio on action bus.
 
@@ -24,8 +24,11 @@ HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
    metadata/ticket mock only (no wet-lab / sequences / protocols).
 
 2a. **Content-binding seal (0.6.1 — done)** — Gate envelopes echo exact approved
-   content; `bus_*_side_effect(connector)` only (no `body=`/`text=` close-over);
-   `ContentBindingError` / `assert_bound_content` for unbound envelopes.
+   content; `bus_*_side_effect(connector)` only.
+
+2b. **Semantic bio stub (0.6.2)** — `bio_semantic.py` tighten-only free-text
+   overlay after structural classify; stub scorer; model judge later.
+
 
 ## Remaining (toward “full”)
 

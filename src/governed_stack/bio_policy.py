@@ -224,7 +224,8 @@ def apply_bio_voucher_honor(
     """
     if not approval_voucher:
         return decision, list(bio_reasons), bio_code, False
-    if stack_decision != "ALLOW" or policy.decision == "BLOCK":
+    # policy BLOCK *or* current decision BLOCK (incl. semantic harden) — never loosen.
+    if stack_decision != "ALLOW" or policy.decision == "BLOCK" or decision == "BLOCK":
         return decision, list(bio_reasons), bio_code, False
     reasons = list(env_reasons or [])
     if not any(str(r).startswith("human_review:approved_via_voucher:") for r in reasons):

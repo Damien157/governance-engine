@@ -8,6 +8,31 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## feat/bio-semantic-overlay — semantic stub 0.6.2 (open — source pass)
+
+| Field | Value |
+|-------|--------|
+| Branch | `feat/bio-semantic-overlay` |
+| Depends on | #17 content-binding on `main` |
+| Module | `src/governed_stack/bio_semantic.py` |
+| Charter | [BIO_SEMANTIC_CHARTER.md](BIO_SEMANTIC_CHARTER.md) |
+
+### What this adds
+
+- Offline **stub** scorer (`score_bio_text`) — charter eval families; no LLM
+- `classify_bio_with_semantic` → structural `classify_bio` then tighten-only semantic
+- Hooked in `GovernedBio.check` + sidecar `channel=bio` **before** voucher honor
+- Envelope field `bio_semantic`; codes `GOV_BIO_SEMANTIC_REVIEW` / `GOV_BIO_SEMANTIC_BLOCK`
+- Failures / injection cues → REVIEW (never ALLOW-by-scorer-failure)
+
+### Accepted residuals
+
+- Stub is phrase-heuristic, not a model judge — paraphrase coverage is limited
+- `synthesis_howto` vs mechanism relies on ordered cue lists (charter §2.1)
+- Model-judge + scorer prompt hygiene (§1.1) still future
+
+---
+
 ## Chronology note (order vs bar)
 
 Ideal bar: seal gate-to-wire **before** shipping constitution/bus claims.

@@ -1,4 +1,4 @@
-# Agent mandates / constitution (0.6.1)
+# Agent mandates / constitution (0.6.2)
 
 Every bot, channel adapter, and automation that touches outbound side effects
 must obey this constitution. **No bypass.**
