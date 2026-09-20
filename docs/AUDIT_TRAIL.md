@@ -13,7 +13,7 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 | Field | Value |
 |-------|--------|
 | Branch | `feat/bio-semantic-overlay` |
-| Depends on | #17 content-binding on `main` |
+| Depends on | PR #17 content-binding on `main` |
 | Module | `src/governed_stack/bio_semantic.py` |
 | Charter | [BIO_SEMANTIC_CHARTER.md](BIO_SEMANTIC_CHARTER.md) |
 
@@ -21,9 +21,10 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 - Offline **stub** scorer (`score_bio_text`) — charter eval families; no LLM
 - `classify_bio_with_semantic` → structural `classify_bio` then tighten-only semantic
-- Hooked in `GovernedBio.check` + sidecar `channel=bio` **before** voucher honor
+- Hooked in `GovernedBio.check` + sidecar bio channel **before** voucher honor
 - Envelope field `bio_semantic`; codes `GOV_BIO_SEMANTIC_REVIEW` / `GOV_BIO_SEMANTIC_BLOCK`
 - Failures / injection cues → REVIEW (never ALLOW-by-scorer-failure)
+- `apply_bio_voucher_honor` also refuses when `decision == "BLOCK"` (semantic harden stays closed)
 
 ### Accepted residuals
 
