@@ -8,6 +8,40 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## PR #19 — semantic stub overlay 0.6.2 (**Verified** / Ready to merge)
+
+| Field | Value |
+|-------|--------|
+| Branch | `feat/bio-semantic-overlay` |
+| Commits | `08e89f0` (stub + charter) · `9091f45` (trail note) |
+| URL | https://github.com/Damien157/governance-engine/pull/19 |
+| Depends on | PR #17 content-binding on `main` |
+| Module | `src/governed_stack/bio_semantic.py` |
+| Charter | [BIO_SEMANTIC_CHARTER.md](BIO_SEMANTIC_CHARTER.md) |
+| Review bar | Source packet: stub families, wire after `classify_bio` before voucher honor, envelope/`GOV_BIO_SEMANTIC_*`, paraphrase residual, `SemanticResult` handoff |
+| Label | **Verified** / **Ready to merge** (2026-09-21 source pass) |
+
+### What this adds
+
+- Offline **stub** scorer (`score_bio_text`) — charter eval families; no LLM
+- `classify_bio_with_semantic` → structural `classify_bio` then tighten-only semantic
+- Hooked in `GovernedBio.check` + sidecar bio channel **before** voucher honor
+- Envelope field `bio_semantic`; codes `GOV_BIO_SEMANTIC_REVIEW` / `GOV_BIO_SEMANTIC_BLOCK`
+- Failures / injection cues → REVIEW (never ALLOW-by-scorer-failure)
+- `apply_bio_voucher_honor` also refuses when `decision == "BLOCK"` (semantic harden stays closed)
+
+### Verdict (source pass)
+
+Merge-ready: stub knows its paraphrase limits; sits after structural / before voucher; tighten-only; HARD_BLOCK stays blocked; no parallel queue; handoff = swap `score_bio_text`, keep `SemanticResult`.
+
+### Accepted residuals
+
+- Stub is phrase-heuristic, not a model judge — paraphrase coverage limited by cue lists (+ `default_benign_stub` fallthrough)
+- `synthesis_howto` vs mechanism relies on ordered cue lists (charter §2.1)
+- Model-judge + scorer prompt hygiene (§1.1) + injectable `SCORER` hook still future
+
+---
+
 ## Chronology note (order vs bar)
 
 Ideal bar: seal gate-to-wire **before** shipping constitution/bus claims.

@@ -6,7 +6,7 @@ GovernedActionBus: mutation facade — require_allow before any side_effect (no 
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 
 
 from .action_bus import (

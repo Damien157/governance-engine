@@ -67,7 +67,7 @@ Bypass / override keys (sealed backdoors) → `GOV_INTENT_INVALID`:
 
 ## Known gaps (explicit)
 
-- **Probe markers are structural, not semantic.** `_bio_shaped_probe` trips on field *names* (`purpose`+`domain`+`intervention_class`), `BIO_SCAN_REJECT_KEYS`, or bio `action` values — including one level of nested `payload`. Free-text synonym dodge on `raw` without those keys can miss the gravity well; accepted limitation until a semantic classifier exists.
+- **Probe markers remain structural.** `_bio_shaped_probe` trips on field *names* (`purpose`+`domain`+`intervention_class`), `BIO_SCAN_REJECT_KEYS`, or bio `action` values — including one level of nested `payload`. Free-text synonym dodge that avoids those keys is handled by the **semantic overlay** (`bio_semantic.py`, charter in `BIO_SEMANTIC_CHARTER.md`) as a tighten-only layer after structural `classify_bio`. Stub scorer in 0.6.2; model judge deferred.
 - **Authority / JWT unblock:** covered by `tests/test_bio_authority_jwt.py` (HARD_BLOCK × roles, voucher cannot soften, tampered JWT). Semantic free-text dodge remains a separate layer (charter).
 - **REVIEW resolve path (now wired):** bio-overlay REVIEW enqueues the audit `entry_id` into `review_queue` even when the stack logged ALLOW. Human resolve via `GovernedBio.resolve_review` / `POST /v1/review/resolve` → approve issues an exact-intent voucher; deny records BLOCK trail. Re-check with `approval_voucher` honors ALLOW for that intent; bio HARD BLOCK still wins over vouchers. Decision cache is skipped when a voucher is present.
 - **REVIEW has no timeout / auto-promotion.** Unresolved PENDING items do not expire or become ALLOW by waiting (never delayed ALLOW). Operational queue risk if humans stall — still accepted residual.

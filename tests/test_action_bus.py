@@ -196,7 +196,7 @@ class TestActionBus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("PUBLIC_EXECUTE_HELPERS", gs.__all__)
         self.assertTrue(callable(GovernedActionBus.execute))
         self.assertTrue(callable(GovernedActionBus.execute_sync))
-        self.assertEqual(__version__, "0.6.1")
+        self.assertEqual(__version__, "0.6.2")
 
     def test_execute_sync_allow(self):
         bus = self.make_bus()
