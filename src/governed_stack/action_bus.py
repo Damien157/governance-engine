@@ -7,8 +7,8 @@ Kills the pattern of “check optional, send anyway.”
 Channels: mail | calendar | social | tool | bio
   - mail/calendar/social: delegate to GovernedMail / GovernedCalendar / GovernedPost
     require_allow (recipients/attendees/URLs stay out of band).
-  - tool: raw GovernIntent via parse_intent / stack.govern; still no side_effect
-    without ALLOW.
+  - tool: GovernedTool.require_allow path via parse_intent / stack.govern;
+    envelope echoes approved intent; side_effect only on ALLOW.
   - bio: GovernedBio.require_allow (check-only policy). side_effect on ALLOW is
     metadata / ticket logging only — never wet-lab, sequences, or protocols.
 
@@ -27,6 +27,7 @@ import inspect
 from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Union
 
 from .bio import GovernedBio
+from .tool import GovernedTool
 from .calendar import GovernedCalendar
 from .contracts import IntentValidationError, intent_invalid_envelope, parse_intent
 from .mail import GovernedMail, SendBlocked
@@ -77,6 +78,7 @@ class GovernedActionBus:
         calendar: Optional[GovernedCalendar] = None,
         post: Optional[GovernedPost] = None,
         bio: Optional[GovernedBio] = None,
+        tool: Optional[GovernedTool] = None,
     ) -> None:
         if stack is not None:
             self.stack = stack
@@ -88,6 +90,8 @@ class GovernedActionBus:
             self.stack = post.stack
         elif bio is not None:
             self.stack = bio.stack
+        elif tool is not None:
+            self.stack = tool.stack
         else:
             # Shared default stack via mail adapter (persists under artifacts/mail).
             mail = GovernedMail()
@@ -99,6 +103,7 @@ class GovernedActionBus:
         )
         self._post = post if post is not None else GovernedPost(stack=self.stack)
         self._bio = bio if bio is not None else GovernedBio(stack=self.stack)
+        self._tool = tool if tool is not None else GovernedTool(stack=self.stack)
 
     @property
     def mail(self) -> GovernedMail:
@@ -115,6 +120,10 @@ class GovernedActionBus:
     @property
     def bio(self) -> GovernedBio:
         return self._bio
+
+    @property
+    def tool(self) -> GovernedTool:
+        return self._tool
 
     def issue_token(self, user: str, role: str = "user") -> str:
         return self.stack.issue_token(user, role)
@@ -257,46 +266,10 @@ class GovernedActionBus:
             raise TypeError("tool channel requires keyword argument 'intent'")
         if not isinstance(intent, dict):
             raise TypeError("tool channel intent must be a dict")
-
-        # Validate early so smuggled routing fails before govern/side_effect.
-        try:
-            parsed = parse_intent(intent)
-            govern_intent: Union[dict, Any] = (
-                parsed.dump_for_govern()
-                if hasattr(parsed, "dump_for_govern")
-                else parsed
-            )
-        except IntentValidationError as exc:
-            env = intent_invalid_envelope(errors=exc.errors, message=str(exc))
-            return {
-                "ok": False,
-                "decision": env.get("decision", "BLOCK"),
-                "reasons": env.get("reasons"),
-                "entry_id": None,
-                "hais": env.get("hais"),
-                "haven2": env.get("haven2"),
-                "error_code": env.get("error_code"),
-                "blocked_send": True,
-                "notes": env.get("notes"),
-                "audit": env.get("audit"),
-            }
-
-        tok = token if token is not None else self.issue_token(user, role)
-        env = await self.stack.govern(govern_intent, tok)
-        decision = env.get("decision", "BLOCK")
-        ok = decision == "ALLOW"
-        return {
-            "ok": ok,
-            "decision": decision,
-            "reasons": env.get("reasons"),
-            "entry_id": env.get("entry_id"),
-            "hais": env.get("hais"),
-            "haven2": env.get("haven2"),
-            "error_code": env.get("error_code"),
-            "blocked_send": not ok,
-            "notes": env.get("notes"),
-            "audit": env.get("audit"),
-        }
+        # Delegate to GovernedTool so ALLOW envelopes carry action/intent/sha.
+        return await self._tool.check(
+            intent=intent, token=token, user=user, role=role
+        )
 
     def execute_sync(
         self,

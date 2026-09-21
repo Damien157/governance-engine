@@ -1,5 +1,5 @@
 """
-Live-connector enforcement pattern (0.6.1).
+Live-connector enforcement pattern (0.6.1 + tool channel 0.7).
 
 Protocols + mocks + factory helpers that produce ``side_effect`` callbacks
 for ``GovernedActionBus.execute``.
@@ -38,6 +38,7 @@ _BOUND_CONTENT_KEYS: dict[str, tuple[str, ...]] = {
     "mail": ("body", "subject", "to"),
     "calendar": ("summary", "description", "location"),
     "social": ("text",),
+    "tool": ("action", "intent", "intent_sha256"),
 }
 
 
@@ -291,6 +292,73 @@ def bus_social_side_effect(publisher: SocialPublisher) -> Callable[[dict], Any]:
     return _side_effect
 
 
+
+@runtime_checkable
+class ToolInvoker(Protocol):
+    """Generic tool/agent invoker — call only from a bus tool side_effect."""
+
+    def invoke(
+        self,
+        *,
+        intent: dict,
+        action: str = "",
+        gate_result: Optional[dict] = None,
+    ) -> dict: ...
+
+
+@dataclass
+class MockToolInvoker:
+    """In-memory tool invoker for tests — never hits a real tool runtime."""
+
+    calls: List[dict] = field(default_factory=list)
+
+    def invoke(
+        self,
+        *,
+        intent: dict,
+        action: str = "",
+        gate_result: Optional[dict] = None,
+    ) -> dict:
+        record = {
+            "mock": True,
+            "action": action or (intent or {}).get("action"),
+            "intent": intent,
+            "entry_id": (gate_result or {}).get("entry_id"),
+            "intent_sha256": (gate_result or {}).get("intent_sha256"),
+        }
+        self.calls.append(record)
+        return record
+
+
+def bus_tool_side_effect(invoker: ToolInvoker) -> Callable[[dict], Any]:
+    """Return a bus ``side_effect`` that invokes a tool from the ALLOW envelope only.
+
+    Reads ``action``, ``intent``, ``intent_sha256`` from the gate result.
+    Closed-over intent kwargs are rejected by signature (connector only).
+    """
+
+    def _side_effect(result: dict) -> Any:
+        assert_bound_content(result, "tool")
+        intent = _require_envelope_field(result, "intent", channel="tool")
+        action = _require_envelope_field(result, "action", channel="tool")
+        # Defense: sha must match envelope intent bytes.
+        from .tool import intent_sha256
+
+        expected = _require_envelope_field(result, "intent_sha256", channel="tool")
+        actual = intent_sha256(intent if isinstance(intent, dict) else {})
+        if actual != expected:
+            raise ContentBindingError(
+                "tool side_effect: intent_sha256 mismatch — refusing swapped intent"
+            )
+        return invoker.invoke(
+            intent=intent,
+            action=str(action),
+            gate_result=result,
+        )
+
+    return _side_effect
+
+
 def bus_bio_side_effect(logger: MockBioTicketLogger) -> Callable[[dict], Any]:
     """Return a bus ``side_effect`` for bio — metadata/ticket only (no protocols)."""
 
@@ -314,4 +382,5 @@ __all__ = [
     "bus_calendar_side_effect",
     "bus_social_side_effect",
     "bus_bio_side_effect",
+    "ToolInvoker",
 ]
