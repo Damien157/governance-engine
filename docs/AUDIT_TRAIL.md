@@ -8,6 +8,28 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## feat/tool-agent-govern-0.7 — tool/agent govern 0.7.0 (open — source pass)
+
+| Field | Value |
+|-------|--------|
+| Branch | `feat/tool-agent-govern-0.7` |
+| Depends on | #19 semantic stub on `main` |
+| Module | `src/governed_stack/tool.py`, connectors `bus_tool_side_effect` |
+
+### What this adds
+
+- `GovernedTool` — `check` / `require_allow`; envelope echoes `action`, `intent`, `intent_sha256`
+- Bus `tool` channel delegates to `GovernedTool` (same envelope)
+- `ToolInvoker` + `MockToolInvoker` + `bus_tool_side_effect(invoker)` — connector only; sha mismatch → `ContentBindingError`
+- `AGENT_TOOL.md` + mandates 0.7
+
+### Accepted residuals
+
+- AST cannot prove every external agent binary uses the bus (mandate residual)
+- No live MCP tool SDK in-repo (mocks + Protocol, same as 0.6.0 connectors)
+
+---
+
 ## PR #19 — semantic stub overlay 0.6.2 (**Verified** / Ready to merge)
 
 | Field | Value |
