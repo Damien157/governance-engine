@@ -22,6 +22,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "ruff>=0.6", "mypy>=1.11"]
+# Optional stdio MCP wrapper (governed_stack.sealed_mail_mcp); tests skip without it.
+mcp = ["mcp>=2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
