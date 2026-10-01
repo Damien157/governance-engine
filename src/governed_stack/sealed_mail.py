@@ -9,7 +9,8 @@ Public surface (by design, nothing else):
 
 Flow for every call:
 
-  1. Recipient allowlist (optional, operator-configured) — BLOCK outside it.
+  1. Recipient allowlist (optional, operator-configured) — BLOCK outside it
+     (audited: recipient count + SHA-256 of normalized recipients only).
   2. Bio seal (pre-probe, *before* the mail gate):
        * JSON-object subject/body → ``SidecarService._bio_shaped_probe``
          (same structural probe that seals ``channel=raw``).
@@ -23,10 +24,18 @@ Flow for every call:
   3. ``GovernedMail.check`` → ``GovernedStack.govern`` (subject+body only;
      recipients stay out of the scanned intent).
   4. BLOCK / REVIEW → return the decision; the backend is never called.
+     (govern() wrote the signed row; if it did not, the adapter writes one.)
   5. ALLOW → build the draft payload **only** from the ALLOW envelope's
      bound content (``to``/``subject``/``body``/``cc``), after
      ``assert_bound_content``. If the envelope content differs from what the
-     caller asked for, raise ``ContentBindingError`` and write nothing.
+     caller asked for, raise ``ContentBindingError`` and write nothing
+     (the refusal is audited first; the govern() row says ALLOW).
+
+Every denial writes a signed, chained audit row before returning/raising
+(see ``record_denial``). Rows carry the real decision (BLOCK/REVIEW), a stage
+marker and reason codes, and SHA-256 digests instead of subject, body or
+recipient addresses. Adapter-written REVIEW rows are logged with
+``enqueue_review=False``: a sealed stop is never a human-approvable item.
 
 There is **no send operation**. The only write is "create a draft", executed
 by an injected ``backend`` callable that receives a frozen ``DraftPayload``.
@@ -77,16 +86,22 @@ STAGE_WRITTEN = "draft_written"
 MAIL_BIO_DOMAIN = "other"
 MAIL_BIO_INTERVENTION_CLASS = "literature"
 
-# Audit row for a bio-sealed mail decision (the seal returns before govern(),
-# so this row is the only record of the decision). Deliberately not
-# ALLOW/REVIEW/BLOCK: AuditStorage.log_decision auto-enqueues REVIEW rows, and
-# a hash-only intent gives a human reviewer nothing to judge. The decision is
-# in ``result`` and ``metadata``.
-SEAL_AUDIT_DECISION_LABEL = "SEALED_MAIL_BIO_SEAL"
-SEAL_AUDIT_ACTION = "sealed_mail_bio_seal"
+# Audit rows for adapter denials. decision = the real decision (BLOCK/REVIEW);
+# the stage marker below is the first policy reason. Adapter-written REVIEW
+# rows are logged with enqueue_review=False, so they never enter
+# review_queue: a sealed stop must not be approvable into a voucher.
+DENIAL_AUDIT_ACTION = "sealed_mail_denial"
+STAGE_CONTENT_BINDING = "content_binding"
+STAGE_MARKERS: Dict[str, str] = {
+    STAGE_ALLOWLIST: "SEALED_MAIL_ALLOWLIST_DENIAL",
+    STAGE_BIO_SEAL: "SEALED_MAIL_BIO_SEAL",
+    STAGE_MAIL_GATE: "SEALED_MAIL_GATE_DENIAL",
+    STAGE_CONTENT_BINDING: "SEALED_MAIL_CONTENT_BINDING_REFUSAL",
+}
 REASON_SEAL = "sealed_mail:bio_seal"
 REASON_SEAL_ERROR = "sealed_mail:bio_seal_error"
 REASON_SEAL_AUDIT_FAILED = "sealed_mail:audit_write_failed"
+REASON_AUDIT_FAILED = REASON_SEAL_AUDIT_FAILED
 
 
 @dataclass(frozen=True)
@@ -234,54 +249,71 @@ def bio_seal(
     }
 
 
-def record_bio_seal(
+def recipients_digest(recipients: Iterable[str]) -> str:
+    """SHA-256 over sorted, lower-cased recipients (correlation, not secrecy)."""
+    norm = sorted({r.strip().lower() for r in recipients})
+    return _sha256(json.dumps(norm, ensure_ascii=False))
+
+
+def record_denial(
     engine: object,
     *,
+    stage: str,
+    decision: str,
+    reasons: Iterable[str],
     subject: str,
     body: str,
-    sealed: Dict[str, Any],
-    recipient_count: int,
+    recipients: Iterable[str],
+    error_code: Optional[str] = None,
+    entry_id: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Write a bio-sealed mail decision to the signed audit chain.
+    """Write an adapter denial to the signed audit chain; return its entry id.
 
-    Stores SHA-256 digests of subject and body, never the raw text. Raises
-    if the engine has no audit storage.
+    ``decision`` is the real decision (BLOCK or REVIEW; anything else is
+    recorded as BLOCK). ``policy_reasons`` = [stage marker] + reason codes.
+    Stores SHA-256 of subject, body and normalized recipients plus the
+    recipient count: never raw text or addresses. Always
+    ``enqueue_review=False``. Raises if the engine has no audit storage.
     """
     storage = getattr(engine, "storage", None)
     log = getattr(storage, "log_decision", None)
     if not callable(log):
         raise RuntimeError("sealed_mail audit unavailable: engine lacks storage.log_decision")
-    subject_sha = _sha256(subject)
-    body_sha = _sha256(body)
-    decision = str(sealed["decision"])
-    reasons = [str(r) for r in sealed.get("reasons") or []]
-    entry_id = log(
-        intent={
-            "action": SEAL_AUDIT_ACTION,
-            "channel": "mail",
-            "subject_sha256": subject_sha,
-            "body_sha256": body_sha,
-            "recipient_count": int(recipient_count),
-        },
-        decision=SEAL_AUDIT_DECISION_LABEL,
-        result=f"sealed_mail:{decision}",
+    if stage not in STAGE_MARKERS:
+        raise ValueError(f"unknown sealed_mail stage: {stage!r}")
+    decision = decision if decision in ("BLOCK", "REVIEW") else "BLOCK"
+    marker = STAGE_MARKERS[stage]
+    recips = list(recipients)
+    digests = {
+        "subject_sha256": _sha256(subject),
+        "body_sha256": _sha256(body),
+        "recipients_sha256": recipients_digest(recips),
+        "recipient_count": len(recips),
+    }
+    codes = [marker] + [str(r) for r in reasons if str(r) != marker]
+    metadata: Dict[str, Any] = {
+        "channel": "mail",
+        "stage": stage,
+        "stage_marker": marker,
+        "decision": decision,
+        "error_code": error_code,
+        "governed_entry_id": entry_id,
+        **digests,
+    }
+    metadata.update(extra or {})
+    new_id = log(
+        intent={"action": DENIAL_AUDIT_ACTION, "channel": "mail", "stage": stage, **digests},
+        decision=decision,
+        result=f"sealed_mail:{stage}",
         verification_score=1.0,
         risk_signal=1.0 if decision == "BLOCK" else 0.5,
         anomaly_signal=0.0,
-        policy_reasons=reasons,
-        metadata={
-            "channel": "mail",
-            "stage": STAGE_BIO_SEAL,
-            "decision": decision,
-            "error_code": sealed.get("error_code"),
-            "seal": sealed.get("seal"),
-            "scorer": sealed.get("scorer"),
-            "subject_sha256": subject_sha,
-            "body_sha256": body_sha,
-            "bio_semantic": sealed.get("bio_semantic"),
-        },
+        policy_reasons=codes,
+        metadata=metadata,
+        enqueue_review=False,
     )
-    return str(entry_id)
+    return str(new_id)
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -336,6 +368,15 @@ class SealedMailAdapter:
         out.update(extra)
         return out
 
+    def _audit_denial(self, reasons: List[str], **kw: Any) -> Optional[str]:
+        """record_denial via this adapter's stack. If the write fails, the denial
+        stands: append the audit-failed reason and return None."""
+        try:
+            return record_denial(getattr(self.__mail.stack, "engine", None), reasons=reasons, **kw)
+        except Exception:
+            reasons.append(REASON_AUDIT_FAILED)
+            return None
+
     async def propose_draft(
         self,
         *,
@@ -356,11 +397,22 @@ class SealedMailAdapter:
         if self.__allowlist is not None:
             outside = [r for r in req_to + req_cc if r.lower() not in self.__allowlist]
             if outside:
+                reasons = [f"sealed_mail:recipient_not_allowlisted:{len(outside)}"]
+                audit_id = self._audit_denial(
+                    reasons,
+                    stage=STAGE_ALLOWLIST,
+                    decision="BLOCK",
+                    subject=subject,
+                    body=body,
+                    recipients=req_to + req_cc,
+                    error_code="GOV_POLICY_BLOCK",
+                )
                 return self._denied(
                     STAGE_ALLOWLIST,
                     "BLOCK",
-                    [f"sealed_mail:recipient_not_allowlisted:{len(outside)}"],
+                    reasons,
                     error_code="GOV_POLICY_BLOCK",
+                    audit_entry_id=audit_id,
                 )
 
         # 2. Bio seal before the mail gate (judge off the event loop, like
@@ -381,18 +433,20 @@ class SealedMailAdapter:
             decision = sealed["decision"] if sealed["decision"] in ("BLOCK", "REVIEW") else "BLOCK"
             sealed["decision"] = decision
             reasons = list(sealed["reasons"])
-            audit_entry_id: Optional[str] = None
-            try:
-                audit_entry_id = record_bio_seal(
-                    getattr(self.__mail.stack, "engine", None),
-                    subject=subject,
-                    body=body,
-                    sealed=sealed,
-                    recipient_count=len(req_to) + len(req_cc),
-                )
-            except Exception:
-                # Decision stays BLOCK/REVIEW and nothing is written; only noted.
-                reasons.append(REASON_SEAL_AUDIT_FAILED)
+            audit_entry_id = self._audit_denial(
+                reasons,
+                stage=STAGE_BIO_SEAL,
+                decision=decision,
+                subject=subject,
+                body=body,
+                recipients=req_to + req_cc,
+                error_code=sealed.get("error_code"),
+                extra={
+                    "seal": sealed.get("seal"),
+                    "scorer": sealed.get("scorer"),
+                    "bio_semantic": sealed.get("bio_semantic"),
+                },
+            )
             return self._denied(
                 STAGE_BIO_SEAL,
                 decision,
@@ -413,39 +467,80 @@ class SealedMailAdapter:
             role=self.__role,
         )
         decision = result.get("decision", "BLOCK")
+        entry_id = result.get("entry_id")
         if decision != "ALLOW" or not result.get("ok"):
             # 4. BLOCK / REVIEW → nothing written.
+            out_decision = decision if decision in ("BLOCK", "REVIEW") else "BLOCK"
+            reasons = list(result.get("reasons") or [])
+            gate_audit_id: Optional[str] = None
+            if not entry_id or out_decision != decision:
+                # govern() left no row (e.g. invalid intent) or its row does not
+                # say what we return: write our own (codes only, no gate reasons).
+                gate_reasons = [f"sealed_mail:gate_decision:{str(decision)[:16]}"]
+                gate_audit_id = self._audit_denial(
+                    gate_reasons,
+                    stage=STAGE_MAIL_GATE,
+                    decision=out_decision,
+                    subject=subject,
+                    body=body,
+                    recipients=req_to + req_cc,
+                    error_code=result.get("error_code"),
+                    entry_id=entry_id,
+                )
+                if gate_audit_id is None:
+                    reasons.append(REASON_AUDIT_FAILED)
             return self._denied(
                 STAGE_MAIL_GATE,
-                decision if decision in ("BLOCK", "REVIEW") else "BLOCK",
-                result.get("reasons"),
-                entry_id=result.get("entry_id"),
+                out_decision,
+                reasons,
+                entry_id=entry_id,
+                audit_entry_id=gate_audit_id or entry_id,
             )
 
-        # 5. ALLOW → payload from the envelope's bound content only.
-        assert_bound_content(result, "mail")
-        env_to = _norm_recipients(result["to"])
-        env_subject = result["subject"]
-        env_body = result["body"]
-        env_cc = _norm_recipients(result.get("cc") or None)
-        if not isinstance(env_subject, str) or not isinstance(env_body, str):
-            raise ContentBindingError("sealed_mail: envelope subject/body not strings")
+        # 5. ALLOW → payload from the envelope's bound content only. Any
+        #    binding refusal is audited (the govern() row says ALLOW), then raised.
+        mismatched: List[str] = []
+        try:
+            assert_bound_content(result, "mail")
+            env_to = _norm_recipients(result["to"])
+            env_subject = result["subject"]
+            env_body = result["body"]
+            env_cc = _norm_recipients(result.get("cc") or None)
+            if not isinstance(env_subject, str) or not isinstance(env_body, str):
+                raise ContentBindingError("sealed_mail: envelope subject/body not strings")
 
-        mismatched = [
-            name
-            for name, env_v, req_v in (
-                ("to", env_to, req_to),
-                ("subject", env_subject, subject),
-                ("body", env_body, body),
-                ("cc", env_cc, req_cc),
+            mismatched = [
+                name
+                for name, env_v, req_v in (
+                    ("to", env_to, req_to),
+                    ("subject", env_subject, subject),
+                    ("body", env_body, body),
+                    ("cc", env_cc, req_cc),
+                )
+                if env_v != req_v
+            ]
+            if mismatched:
+                raise ContentBindingError(
+                    "sealed_mail: ALLOW envelope content differs from the requested "
+                    f"draft on {mismatched}; refusing to write (content-swap guard)"
+                )
+        except (ContentBindingError, KeyError, TypeError) as exc:
+            self._audit_denial(
+                ["sealed_mail:content_binding_refused"]
+                + [f"sealed_mail:content_mismatch:{f}" for f in mismatched],
+                stage=STAGE_CONTENT_BINDING,
+                decision="BLOCK",
+                subject=subject,
+                body=body,
+                recipients=req_to + req_cc,
+                error_code="GOV_CONTENT_BINDING",
+                entry_id=entry_id,
             )
-            if env_v != req_v
-        ]
-        if mismatched:
+            if isinstance(exc, ContentBindingError):
+                raise
             raise ContentBindingError(
-                "sealed_mail: ALLOW envelope content differs from the requested "
-                f"draft on {mismatched}; refusing to write (content-swap guard)"
-            )
+                f"sealed_mail: malformed ALLOW envelope ({type(exc).__name__}); refusing to write"
+            ) from exc
 
         payload = DraftPayload(
             to=env_to,
@@ -516,6 +611,7 @@ __all__ = [
     "bio_seal",
     "content_digest",
     "mail_bio_request",
-    "record_bio_seal",
+    "recipients_digest",
+    "record_denial",
     "spool_backend",
 ]
