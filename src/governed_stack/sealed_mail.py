@@ -13,8 +13,13 @@ Flow for every call:
   2. Bio seal (pre-probe, *before* the mail gate):
        * JSON-object subject/body → ``SidecarService._bio_shaped_probe``
          (same structural probe that seals ``channel=raw``).
-       * Free text → ``classify_bio_with_semantic`` (structural phrases +
-         0.6.2 semantic stub), tighten-only. BLOCK/REVIEW short-circuits.
+       * Free text → the bio channel's semantic judge
+         (``bio_semantic_judge.judge_bio_request``: structural ``classify_bio``
+         + the overlay kernel, with the same default stub classifier,
+         injectable ``BioSemanticJudge``, fail-closed REVIEW and charter reason
+         vocabulary). Tighten-only. BLOCK/REVIEW short-circuits, and the sealed
+         decision is first written to the signed audit chain (SHA-256 of
+         subject/body only, never raw text).
   3. ``GovernedMail.check`` → ``GovernedStack.govern`` (subject+body only;
      recipients stay out of the scanned intent).
   4. BLOCK / REVIEW → return the decision; the backend is never called.
@@ -47,7 +52,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-from .bio_semantic import classify_bio_with_semantic
+from .bio_semantic_judge import (
+    CHARTER_REASONS,
+    DEFAULT_JUDGE,
+    BioJudgement,
+    BioRequest,
+    BioSemanticJudge,
+    judge_bio_request,
+    semantic_audit_dict,
+)
 from .connectors import ContentBindingError, assert_bound_content
 from .mail import GovernedMail
 
@@ -57,6 +70,23 @@ STAGE_ALLOWLIST = "recipient_allowlist"
 STAGE_BIO_SEAL = "bio_seal"
 STAGE_MAIL_GATE = "mail_gate"
 STAGE_WRITTEN = "draft_written"
+
+# Mail text -> bio request mapping. Mail has no structural bio fields, so it is
+# judged as a low-risk literature request: only the free text can tighten it.
+# The bio channel with the same fields scores identically.
+MAIL_BIO_DOMAIN = "other"
+MAIL_BIO_INTERVENTION_CLASS = "literature"
+
+# Audit row for a bio-sealed mail decision (the seal returns before govern(),
+# so this row is the only record of the decision). Deliberately not
+# ALLOW/REVIEW/BLOCK: AuditStorage.log_decision auto-enqueues REVIEW rows, and
+# a hash-only intent gives a human reviewer nothing to judge. The decision is
+# in ``result`` and ``metadata``.
+SEAL_AUDIT_DECISION_LABEL = "SEALED_MAIL_BIO_SEAL"
+SEAL_AUDIT_ACTION = "sealed_mail_bio_seal"
+REASON_SEAL = "sealed_mail:bio_seal"
+REASON_SEAL_ERROR = "sealed_mail:bio_seal_error"
+REASON_SEAL_AUDIT_FAILED = "sealed_mail:audit_write_failed"
 
 
 @dataclass(frozen=True)
@@ -115,15 +145,56 @@ def _maybe_json_dict(text: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-def bio_seal(subject: str, body: str) -> Optional[Dict[str, Any]]:
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def mail_bio_request(subject: str, body: str) -> BioRequest:
+    """The bio request mail text is judged as (same as ``channel=bio`` with these fields)."""
+    return BioRequest(
+        purpose=subject or "",
+        domain=MAIL_BIO_DOMAIN,
+        intervention_class=MAIL_BIO_INTERVENTION_CLASS,
+        summary=body or "",
+    )
+
+
+def _reason_codes(reasons: Iterable[str]) -> List[str]:
+    """Charter reasons pass through. ``bio_policy:`` reasons are cut to their
+    category (``bio_policy:block_phrase:<phrase>`` -> ``bio_policy:block_phrase``)
+    so no request text reaches mail reasons or the audit row. Anything else is
+    dropped."""
+    out: List[str] = []
+    for r in reasons:
+        if not isinstance(r, str):
+            continue
+        if r in CHARTER_REASONS:
+            code = r
+        elif r.startswith("bio_policy:"):
+            code = ":".join(r.split(":")[:2])
+        else:
+            continue
+        if code not in out:
+            out.append(code)
+    return out
+
+
+def bio_seal(
+    subject: str, body: str, *, judge: Optional[BioSemanticJudge] = None
+) -> Optional[Dict[str, Any]]:
     """Tighten-only bio pre-probe for mail content.
 
-    Returns ``None`` when mail may proceed to the mail gate, else a dict with
-    ``decision`` (BLOCK|REVIEW), ``reasons`` and ``error_code``.
+    Returns ``None`` when mail may proceed to the mail gate. Otherwise returns
+    a dict with ``decision`` (BLOCK|REVIEW), ``reasons`` (codes only),
+    ``error_code``, ``seal`` (``raw_json_probe`` | ``semantic_judge``),
+    ``scorer`` and, for the judge, ``bio_semantic`` (audit view: hashes and
+    scores only). Free text is scored by the same judge path as the bio
+    channel. Any unexpected error gives REVIEW.
     """
     # Lazy import: sidecar pulls the HTTP server module; keep import cheap.
     from .sidecar import SidecarService
 
+    judge = judge if judge is not None else DEFAULT_JUDGE
     for where, text in (("subject", subject), ("body", body)):
         probe = _maybe_json_dict(text)
         if probe is not None and SidecarService._bio_shaped_probe(probe):
@@ -133,22 +204,84 @@ def bio_seal(subject: str, body: str) -> Optional[Dict[str, Any]]:
                     f"sealed_mail:bio_backdoor_blocked:{where}:use_channel_bio",
                 ],
                 "error_code": "GOV_INTENT_INVALID",
+                "seal": "raw_json_probe",
+                "scorer": judge.scorer_id,
+                "bio_semantic": None,
             }
 
-    policy, semantic = classify_bio_with_semantic(
-        purpose=subject or "",
-        domain="other",
-        intervention_class="literature",
-        summary=body or "",
-    )
-    if policy.decision in ("BLOCK", "REVIEW"):
+    try:
+        judgement: BioJudgement = judge_bio_request(mail_bio_request(subject, body), judge)
+    except Exception:  # fail closed; message deliberately not propagated
         return {
-            "decision": policy.decision,
-            "reasons": ["sealed_mail:bio_seal"] + list(policy.reasons),
-            "error_code": policy.error_code,
-            "bio_semantic": semantic.as_dict() if hasattr(semantic, "as_dict") else None,
+            "decision": "REVIEW",
+            "reasons": [REASON_SEAL, REASON_SEAL_ERROR],
+            "error_code": "GOV_BIO_SEMANTIC_REVIEW",
+            "seal": "semantic_judge",
+            "scorer": judge.scorer_id,
+            "bio_semantic": None,
         }
-    return None
+    policy = judgement.policy
+    if policy.decision == "ALLOW_CANDIDATE":
+        return None
+    decision = policy.decision if policy.decision in ("BLOCK", "REVIEW") else "BLOCK"
+    return {
+        "decision": decision,
+        "reasons": [REASON_SEAL] + _reason_codes(policy.reasons),
+        "error_code": policy.error_code,
+        "seal": "semantic_judge",
+        "scorer": judgement.scorer_id,
+        "bio_semantic": semantic_audit_dict(judgement),
+    }
+
+
+def record_bio_seal(
+    engine: object,
+    *,
+    subject: str,
+    body: str,
+    sealed: Dict[str, Any],
+    recipient_count: int,
+) -> str:
+    """Write a bio-sealed mail decision to the signed audit chain.
+
+    Stores SHA-256 digests of subject and body, never the raw text. Raises
+    if the engine has no audit storage.
+    """
+    storage = getattr(engine, "storage", None)
+    log = getattr(storage, "log_decision", None)
+    if not callable(log):
+        raise RuntimeError("sealed_mail audit unavailable: engine lacks storage.log_decision")
+    subject_sha = _sha256(subject)
+    body_sha = _sha256(body)
+    decision = str(sealed["decision"])
+    reasons = [str(r) for r in sealed.get("reasons") or []]
+    entry_id = log(
+        intent={
+            "action": SEAL_AUDIT_ACTION,
+            "channel": "mail",
+            "subject_sha256": subject_sha,
+            "body_sha256": body_sha,
+            "recipient_count": int(recipient_count),
+        },
+        decision=SEAL_AUDIT_DECISION_LABEL,
+        result=f"sealed_mail:{decision}",
+        verification_score=1.0,
+        risk_signal=1.0 if decision == "BLOCK" else 0.5,
+        anomaly_signal=0.0,
+        policy_reasons=reasons,
+        metadata={
+            "channel": "mail",
+            "stage": STAGE_BIO_SEAL,
+            "decision": decision,
+            "error_code": sealed.get("error_code"),
+            "seal": sealed.get("seal"),
+            "scorer": sealed.get("scorer"),
+            "subject_sha256": subject_sha,
+            "body_sha256": body_sha,
+            "bio_semantic": sealed.get("bio_semantic"),
+        },
+    )
+    return str(entry_id)
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -160,7 +293,7 @@ async def _maybe_await(value: Any) -> Any:
 class SealedMailAdapter:
     """Drafts-only, gate-first mail adapter. See module docstring."""
 
-    __slots__ = ("__backend", "__mail", "__allowlist", "__user", "__role")
+    __slots__ = ("__backend", "__mail", "__allowlist", "__user", "__role", "__judge")
 
     def __init__(
         self,
@@ -170,9 +303,15 @@ class SealedMailAdapter:
         recipient_allowlist: Optional[Iterable[str]] = None,
         user: str = "damien",
         role: str = "user",
+        bio_judge: Optional[BioSemanticJudge] = None,
     ) -> None:
         if backend is None or not callable(backend):
             raise TypeError("backend must be a callable taking a DraftPayload")
+        if bio_judge is None:
+            bio_judge = DEFAULT_JUDGE  # same default as GovernedBio / sidecar
+        if not isinstance(bio_judge, BioSemanticJudge):
+            raise TypeError("bio_judge must be a BioSemanticJudge")
+        self.__judge = bio_judge
         self.__backend = backend
         self.__mail = mail if mail is not None else GovernedMail()
         self.__allowlist = (
@@ -224,14 +363,44 @@ class SealedMailAdapter:
                     error_code="GOV_POLICY_BLOCK",
                 )
 
-        # 2. Bio seal before the mail gate.
-        sealed = bio_seal(subject, body)
+        # 2. Bio seal before the mail gate (judge off the event loop, like
+        #    govern_bio_request). Any exception here is a REVIEW seal, never a
+        #    pass-through to the gate.
+        try:
+            sealed = await asyncio.to_thread(bio_seal, subject, body, judge=self.__judge)
+        except Exception:
+            sealed = {
+                "decision": "REVIEW",
+                "reasons": [REASON_SEAL, REASON_SEAL_ERROR],
+                "error_code": "GOV_BIO_SEMANTIC_REVIEW",
+                "seal": "semantic_judge",
+                "scorer": self.__judge.scorer_id,
+                "bio_semantic": None,
+            }
         if sealed is not None:
+            decision = sealed["decision"] if sealed["decision"] in ("BLOCK", "REVIEW") else "BLOCK"
+            sealed["decision"] = decision
+            reasons = list(sealed["reasons"])
+            audit_entry_id: Optional[str] = None
+            try:
+                audit_entry_id = record_bio_seal(
+                    getattr(self.__mail.stack, "engine", None),
+                    subject=subject,
+                    body=body,
+                    sealed=sealed,
+                    recipient_count=len(req_to) + len(req_cc),
+                )
+            except Exception:
+                # Decision stays BLOCK/REVIEW and nothing is written; only noted.
+                reasons.append(REASON_SEAL_AUDIT_FAILED)
             return self._denied(
                 STAGE_BIO_SEAL,
-                sealed["decision"],
-                sealed["reasons"],
+                decision,
+                reasons,
                 error_code=sealed.get("error_code"),
+                audit_entry_id=audit_entry_id,
+                scorer=sealed.get("scorer"),
+                bio_semantic=sealed.get("bio_semantic"),
             )
 
         # 3. Mail gate → GovernedStack.govern (subject + body only).
@@ -346,5 +515,7 @@ __all__ = [
     "SealedMailAdapter",
     "bio_seal",
     "content_digest",
+    "mail_bio_request",
+    "record_bio_seal",
     "spool_backend",
 ]
