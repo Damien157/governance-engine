@@ -114,8 +114,10 @@ nothing enforced it.
 - ~~A bio-sealed decision short-circuits before `govern()`, so it writes no mail audit entry.~~
   Fixed in v2/v3: every denial has a signed row with the real decision. Adapter rows are not
   `govern()` rows, so they carry no HAIS / Haven2 telemetry.
-- `enqueue_review` was added to `certified_governance_unified.AuditStorage` only. The
-  `hais/certified_governance.py` copy was not changed.
+- ~~`enqueue_review` was added to `certified_governance_unified.AuditStorage` only.~~ The flag
+  and the `stats()["reviewed"]` count are also in `hais/certified_governance.py` (the
+  `hais/certified_governance_unified.py` shim re-exports the root module). This is covered by
+  `tests/test_hais_audit_review_flag.py`.
 - SHA-256 of a short or guessable subject/body can be confirmed by dictionary guessing. The
   hashes support correlation, not confidentiality.
 - ~~The `recipient_allowlist` BLOCK is not audited.~~ Fixed in v3.
