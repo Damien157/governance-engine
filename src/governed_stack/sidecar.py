@@ -30,12 +30,12 @@ from urllib.parse import parse_qs, urlparse
 
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .bio import intent_for_scan as bio_intent_for_scan
-from .bio_semantic import classify_bio_with_semantic
 from .bio_policy import (
     apply_bio_voucher_honor,
     enqueue_bio_overlay_review,
     tighten_decision,
 )
+from .bio_semantic import classify_bio_with_semantic
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .contracts import (
     ALGORITHM_SCAN_FORBIDDEN,
