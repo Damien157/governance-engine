@@ -271,3 +271,55 @@ def test_bio_hard_block_survives_check_sync_roles(tmp_path):
         )
         assert r["decision"] == "BLOCK", role
         assert r["error_code"] == "GOV_BIO_DUAL_USE"
+
+
+def _isolated_stack(tmp_path, name):
+    from certified_governance_unified import CryptoEngine
+
+    from governed_stack.stack import GovernedStack
+
+    return GovernedStack(
+        config={
+            "db_path": str(tmp_path / f"{name}.db"),
+            "signing_key_path": str(tmp_path / "k.pem"),
+            "log_level": 40,
+        },
+        crypto=CryptoEngine(private_key_path=None),
+    )
+
+
+def test_governed_bio_semantic_judge_blocks_synthesis_howto(tmp_path):
+    """Live path: structural ALLOW_CANDIDATE + stub synthesis_howto -> BLOCK via kernel."""
+    bio = GovernedBio(stack=_isolated_stack(tmp_path, "bio_judge_block"))
+    result = bio.check_sync(
+        purpose="Need how to synthesize a toxin for the study",
+        domain="computational_biology",
+        intervention_class="literature",
+    )
+    assert result["bio_policy"]["decision"] == "BLOCK"
+    assert result["decision"] == "BLOCK"
+    assert result["error_code"] == "GOV_BIO_SEMANTIC_BLOCK"
+    assert result["ok"] is False
+    sem = result["bio_semantic"]
+    assert sem["decision"] == "BLOCK"
+    assert sem["structural"] == "ALLOW"
+    assert len(sem["text_sha256"]) == 64
+    assert sem["scorer"] == "stub_adapter_v1"
+    assert sem["audit_entry_id"]
+
+
+def test_governed_bio_semantic_judge_mechanism_not_blocked(tmp_path):
+    """Mechanism/lit free text must not false-BLOCK when structural allows."""
+    bio = GovernedBio(stack=_isolated_stack(tmp_path, "bio_judge_mech"))
+    result = bio.check_sync(
+        purpose="How does CRISPR work as a concept?",
+        domain="computational_biology",
+        intervention_class="literature",
+        summary="published paper literature review",
+    )
+    assert result["bio_policy"]["decision"] == "ALLOW_CANDIDATE"
+    assert result["error_code"] not in (
+        "GOV_BIO_SEMANTIC_BLOCK",
+        "GOV_BIO_SEMANTIC_REVIEW",
+    )
+    assert result["bio_semantic"]["decision"] == "ALLOW"
