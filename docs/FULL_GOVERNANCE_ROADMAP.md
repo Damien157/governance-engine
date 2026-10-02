@@ -1,6 +1,6 @@
 # Full governance system — roadmap
 
-Milestone **0.6.2**: semantic bio stub. Builds on **0.6.1**: **Content-binding seal** (approved content on envelope;
+Milestone **0.7.0**: tool/agent govern. Builds on **0.6.2**: semantic bio stub. Builds on **0.6.1**: **Content-binding seal** (approved content on envelope;
 factories reject closed-over gated kwargs). Builds on **0.6.0** live-connector
 enforcement + no-bypass lint + bio on action bus.
 
@@ -36,9 +36,8 @@ HAIS SovereignKernel remains **m=0.5**. Sketches stay **off** `govern()`.
    in the all-works suite. Optional: import-linter / stronger symbol graph that
    outbound send symbols are only reachable from bus side_effects.
 
-4. **Tool / agent govern** — expand `tool` channel + agent runtimes so every
-   tool call is an intent through the bus (no “check optional, act anyway”);
-   wire agent hosts to `AGENT_MANDATES.md` by default.
+4. **Deeper agent-host wiring** — prove external agent runtimes import
+   `AGENT_TOOL.md` / bus by default (package path done in 0.7; host adoption residual).
 
 5. **Hard tenancy / KMS** — beyond multi-tenant lite: real KMS/HSM providers,
    stronger isolation, quotas, and operator SSO (not claimed today).

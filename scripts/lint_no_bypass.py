@@ -38,6 +38,8 @@ FORBIDDEN_SUBSTRINGS: Tuple[str, ...] = (
     "statuses/update",
     "publish_tweet(",
     "create_tweet(",
+    "call_tool(",
+    "invoke_tool(",
 )
 
 # AST Call attribute names treated as forbidden when they match these.
@@ -47,6 +49,8 @@ FORBIDDEN_ATTR_CALLS: frozenset[str] = frozenset(
         "create_draft",
         "publish_tweet",
         "create_tweet",
+        "call_tool",
+        "invoke_tool",
     }
 )
 
@@ -54,6 +58,7 @@ ALLOWLIST_PREFIXES: Tuple[str, ...] = (
     "tests/",
     "docs/",
     "src/governed_stack/connectors.py",
+    "src/governed_stack/tool.py",
     "src/governed_stack/action_bus.py",
     "scripts/lint_no_bypass.py",
     "scripts/send_governed_mail.py",
