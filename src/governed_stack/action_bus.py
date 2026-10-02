@@ -24,15 +24,14 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
-from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional
 
 from .bio import GovernedBio
-from .tool import GovernedTool
 from .calendar import GovernedCalendar
-from .contracts import IntentValidationError, intent_invalid_envelope, parse_intent
 from .mail import GovernedMail, SendBlocked
 from .social import GovernedPost
 from .stack import GovernedStack, ensure_import_paths
+from .tool import GovernedTool
 
 ensure_import_paths()
 

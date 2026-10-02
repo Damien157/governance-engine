@@ -18,7 +18,6 @@ from .action_bus import (
 from .algorithm import AlgorithmBlocked, GovernedAlgorithm
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .bio import BioBlocked, GovernedBio
-from .tool import GovernedTool, ToolBlocked, intent_sha256
 from .bio import intent_for_scan as bio_intent_for_scan
 from .calendar import CalendarBlocked, GovernedCalendar
 from .calendar import intent_for_scan as calendar_intent_for_scan
@@ -31,15 +30,15 @@ from .connectors import (
     MockCalendarWriter,
     MockMailSender,
     MockSocialPublisher,
+    MockToolInvoker,
     SocialPublisher,
+    ToolInvoker,
     assert_bound_content,
     bus_bio_side_effect,
-    bus_tool_side_effect,
-    MockToolInvoker,
-    ToolInvoker,
     bus_calendar_side_effect,
     bus_mail_side_effect,
     bus_social_side_effect,
+    bus_tool_side_effect,
 )
 from .contracts import (
     GOV_AUTH_FAILED,
@@ -95,6 +94,7 @@ from .social import GovernedOutboundText, GovernedPost, PostBlocked
 from .social import intent_for_scan as social_intent_for_scan
 from .spectral_audit import attach_spectrum, build_spectrum
 from .stack import GovernedStack, ensure_import_paths
+from .tool import GovernedTool, ToolBlocked, intent_sha256
 from .unified import GovernedUnified, HavenUnified
 
 __all__ = [
