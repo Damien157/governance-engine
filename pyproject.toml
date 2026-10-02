@@ -44,6 +44,10 @@ src = ["src"]
 select = ["E", "F", "I"]
 ignore = ["E501", "E741"]
 
+[tool.ruff.lint.per-file-ignores]
+# User-authored overlay kernel, vendored byte-for-byte; keep it unmodified.
+"src/governed_stack/bio_semantic_overlay.py" = ["I001"]
+
 # mypy gates src/governed_stack only (not the certified_governance_unified monolith).
 # python_version=3.12: numpy stubs use `type` statements; CI runs 3.12/3.13.
 # requires-python remains >=3.10 for runtime.
@@ -69,3 +73,9 @@ module = [
   "governance_engine.*",
 ]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# User-authored overlay kernel, vendored byte-for-byte; keep it unmodified.
+# Narrow: only the two codes it trips (numbers.Real compare, getattr index).
+module = ["governed_stack.bio_semantic_overlay"]
+disable_error_code = ["operator", "index"]

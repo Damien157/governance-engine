@@ -8,12 +8,43 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## Bio semantic judge adapter (**Reported**, local branch, source review pending)
+
+| Field | Value |
+|-------|--------|
+| Branch | `feat/bio-semantic-judge-adapter` (off `main` @ `bac092b`; local only, not pushed) |
+| Kernel | `src/governed_stack/bio_semantic_overlay.py`: user-authored, **vendored byte-for-byte** (sha256 `aab42764…9c89`); its 53 tests are vendored verbatim as `tests/test_bio_semantic_overlay.py` |
+| Adapter | `src/governed_stack/bio_semantic_judge.py` |
+| Tests | `tests/test_bio_semantic_judge.py` (`test_i1_*` … `test_i6_*`), plus 2 live-path tests in `tests/test_bio_governance.py` |
+| Label | **Reported** until Damien has reviewed the source and run pytest |
+
+### What changed
+
+- **Single bio pipeline.** `GovernedBio.check` and sidecar `channel=bio` both call `govern_bio_request`. The order is: structural `classify_bio` → kernel `evaluate_overlay` → merge (tighten-only) → `stack.govern` → `tighten_decision` → `apply_bio_voucher_honor` → judgement audit row → REVIEW enqueue.
+- **Bridge.** ALLOW_CANDIDATE↔ALLOW, REVIEW↔REVIEW, BLOCK↔BLOCK. Any other structural state goes to the kernel as invalid, so it returns BLOCK. The kernel's ALLOW maps back to ALLOW_CANDIDATE: the bio layer never grants ALLOW. A structural BLOCK keeps its own code (`GOV_BIO_DUAL_USE`).
+- **Judge before voucher.** The judge runs before `stack.govern`. A judged BLOCK withholds the voucher from the stack (`bio_semantic:voucher_withheld`), so the voucher is never presented or consumed.
+- **Classifier.** The default is the stub (`stub_heuristic_classifier` over `score_bio_text`), which keeps the 0.6.2 actions. A model judge plugs in through `BioSemanticJudge(classifier, scorer_id, config)`, set with `GovernedBio(semantic_judge=…)` or `SidecarService(bio_semantic_judge=…)`. Multi-tenant setups use the registry `service_factory`.
+- **Reasons.** The vocabulary is closed (`CHARTER_REASONS`: the charter §2 labels, merge markers, and `judge_failed:<category>`). Reasons are derived only from validated scores and the failure category. Classifier free-text reasons and the stub's cue phrases are never forwarded. Text is carried only as its SHA-256.
+- **Fail closed.** Classifier output is snapshotted (each label read once) before the kernel validates it. A kernel-call exception (`adapter_error`) or a malformed/looser outcome (`malformed_outcome`) gives REVIEW (BLOCK if the structural state is unknown). If the judgement audit write fails, ALLOW is tightened to REVIEW.
+- **Audit.** Every judgement, structural BLOCKs included, is written as its own signed, chained row: `decision=BIO_SEMANTIC_JUDGEMENT`, `result=bio_semantic:<final>`, and metadata with `judged_entry_id`, scores, fail_reason and scorer. The row is never enqueued.
+- **Config only.** Narrow ruff (`I001`) / mypy (`operator`, `index`) exemptions for the vendored kernel file, so it can stay unmodified.
+
+### Findings / accepted residuals
+
+- **Raw-kernel TOCTOU (adapter closes it; kernel not modified).** `_score` validates a mapping and then re-reads it. If the re-read gives NaN or a negative number, `max()` turns it into 0.0, so a validated 0.9 can come out as ALLOW. Tracked by the strict-xfail test `test_i5_raw_kernel_rugpull_toctou_gap_documented`. Suggested kernel fix: snapshot `scores = dict(scores)` before `validate_scores`.
+- The stub is still phrase-heuristic. A benign cue (e.g. "published paper") checked first can mask a later harm cue (PR #19 residual, unchanged).
+- Judgement rows use a non-decision label (not counted by `storage.stats()`). Audit consumers must look for `BIO_SEMANTIC_JUDGEMENT`.
+- Running classifier threads cannot be cancelled on timeout. The kernel's bounded pool fails closed (REVIEW) once it is wedged.
+
+---
+
 ## feat/tool-agent-govern-0.7 — tool/agent govern 0.7.0 (open — source pass)
 
 | Field | Value |
 |-------|--------|
 | Branch | `feat/tool-agent-govern-0.7` |
 | Depends on | #19 semantic stub on `main` |
+| Synced with `main` | merge of `origin/main` @ `495b294` (#21 ruff I001, #22 bio semantic judge); bio channel still routes through `govern_bio_request` |
 | Module | `src/governed_stack/tool.py`, connectors `bus_tool_side_effect` |
 
 ### What this adds
