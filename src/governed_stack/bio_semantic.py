@@ -7,6 +7,14 @@ pattern/heuristic labels for eval fixtures. Model judge is a later swap.
 Input hygiene: free text is **untrusted data**, never instructions.
 Failures / empty parse → REVIEW (never ALLOW-by-scorer-failure).
 Never emits protocols, sequences, or how-tos in reasons (category only).
+
+Live wiring (adapter): the bio channel's semantic judge is the overlay kernel
+(``bio_semantic_overlay``) driven by ``bio_semantic_judge``. ``score_bio_text``
+here is that judge's **default classifier** (via ``stub_heuristic_classifier``).
+``classify_bio_with_semantic`` / ``apply_semantic_tighten`` are the legacy
+0.6.2 merge path, kept for unit tests only. Live adapters must call
+``bio_semantic_judge.govern_bio_request`` (enforced by
+tests/test_bio_semantic_judge.py::test_i6_no_live_module_bypasses_judge_pipeline).
 """
 
 from __future__ import annotations

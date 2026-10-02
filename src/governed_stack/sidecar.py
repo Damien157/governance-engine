@@ -30,12 +30,12 @@ from urllib.parse import parse_qs, urlparse
 
 from .algorithm import intent_for_scan as algorithm_intent_for_scan
 from .bio import intent_for_scan as bio_intent_for_scan
-from .bio_policy import (
-    apply_bio_voucher_honor,
-    enqueue_bio_overlay_review,
-    tighten_decision,
+from .bio_semantic_judge import (
+    DEFAULT_JUDGE,
+    BioRequest,
+    BioSemanticJudge,
+    govern_bio_request,
 )
-from .bio_semantic import classify_bio_with_semantic
 from .calendar import intent_for_scan as calendar_intent_for_scan
 from .contracts import (
     ALGORITHM_SCAN_FORBIDDEN,
@@ -481,7 +481,15 @@ class SidecarService:
         *,
         crypto: Any = None,
         registry: Optional[TenantRegistry] = None,
+        bio_semantic_judge: Optional[BioSemanticJudge] = None,
     ) -> None:
+        # Bio semantic judge for channel=bio (default: offline stub classifier).
+        # Multi-tenant: inject per tenant via TenantRegistry(service_factory=...).
+        if bio_semantic_judge is None:
+            bio_semantic_judge = DEFAULT_JUDGE
+        if not isinstance(bio_semantic_judge, BioSemanticJudge):
+            raise TypeError("bio_semantic_judge must be a BioSemanticJudge")
+        self.bio_semantic_judge = bio_semantic_judge
         self.config = dict(config or load_sidecar_config())
         self.api_key: Optional[str] = self.config.get("api_key")
         skip_registry = bool(self.config.pop("_skip_registry", False))
@@ -665,39 +673,34 @@ class SidecarService:
                     "entry_id": None,
                 }
             voucher = body.get("approval_voucher")
-            govern_opts = {}
-            if isinstance(voucher, str) and voucher.strip():
-                govern_opts["approval_voucher"] = voucher.strip()
-            env = await self.stack.govern(intent, token, **govern_opts)
-            policy, semantic = classify_bio_with_semantic(
+            request = BioRequest(
                 purpose=str(body.get("purpose") or ""),
                 domain=str(body.get("domain") or ""),
                 intervention_class=str(body.get("intervention_class") or ""),
                 summary=str(body.get("summary") or ""),
-                risk_notes=str(body.get("risk_notes") or ""),
                 subject_scope=str(body.get("subject_scope") or ""),
+                risk_notes=str(body.get("risk_notes") or ""),
                 authority_role=str(body.get("authority_role") or ""),
                 irreversible=bool(body.get("irreversible") or False),
                 human_subjects=bool(body.get("human_subjects") or False),
                 dual_use_flag=bool(body.get("dual_use_flag") or False),
             )
-            stack_decision = str(env.get("decision", "BLOCK"))
-            decision, bio_reasons, bio_code = tighten_decision(stack_decision, policy)
-            decision, bio_reasons, bio_code, voucher_honored = apply_bio_voucher_honor(
-                approval_voucher=govern_opts.get("approval_voucher"),
-                stack_decision=stack_decision,
-                policy=policy,
-                env_reasons=env.get("reasons"),
-                decision=decision,
-                bio_reasons=bio_reasons,
-                bio_code=bio_code,
+            # Same single bio pipeline as GovernedBio.check: semantic judge runs
+            # before govern / voucher honor; judgement recorded in the audit chain.
+            out = await govern_bio_request(
+                self.stack,
+                intent,
+                token,
+                request,
+                approval_voucher=(
+                    voucher.strip() if isinstance(voucher, str) and voucher.strip() else None
+                ),
+                judge=self.bio_semantic_judge,
             )
-            entry_id = env.get("entry_id")
-            queued = False
-            if decision == "REVIEW" and entry_id:
-                queued = enqueue_bio_overlay_review(
-                    getattr(self.stack, "engine", None), entry_id
-                )
+            env = out.env
+            decision = out.decision
+            bio_reasons = out.bio_reasons
+            bio_code = out.error_code
             slim = self._slim_envelope(env)
             slim["decision"] = decision
             slim["ok"] = decision == "ALLOW"
@@ -706,14 +709,14 @@ class SidecarService:
                 if r not in reasons:
                     reasons.append(r)
             slim["reasons"] = reasons
-            slim["bio_policy"] = policy.as_dict()
-            slim["bio_semantic"] = semantic.as_dict()
+            slim["bio_policy"] = out.policy.as_dict()
+            slim["bio_semantic"] = out.semantic
             if bio_code:
                 slim["error_code"] = bio_code
             slim["domain"] = str(body.get("domain") or "")
             slim["intervention_class"] = str(body.get("intervention_class") or "")
-            slim["review_enqueued"] = queued
-            slim["voucher_honored"] = voucher_honored
+            slim["review_enqueued"] = out.review_enqueued
+            slim["voucher_honored"] = out.voucher_honored
             return slim
 
         elif channel == "algorithm":

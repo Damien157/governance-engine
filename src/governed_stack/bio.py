@@ -16,12 +16,12 @@ import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .bio_policy import (
-    apply_bio_voucher_honor,
-    enqueue_bio_overlay_review,
-    tighten_decision,
+from .bio_semantic_judge import (
+    DEFAULT_JUDGE,
+    BioRequest,
+    BioSemanticJudge,
+    govern_bio_request,
 )
-from .bio_semantic import classify_bio_with_semantic
 from .contracts import BIO_VOUCHER_TTL_DEFAULT, validate_bio_scan
 from .mail import SendBlocked
 from .stack import GovernedStack, ensure_import_paths
@@ -73,13 +73,28 @@ def intent_for_scan(
 
 
 class GovernedBio:
-    """Adapter: bio policy overlay + Authority/Audit via GovernedStack."""
+    """Adapter: bio policy overlay + Authority/Audit via GovernedStack.
 
-    def __init__(self, stack: Optional[GovernedStack] = None) -> None:
+    ``semantic_judge`` injects the bio semantic judge (classifier + scorer id +
+    kernel config). Default: offline stub classifier. See
+    ``governed_stack.bio_semantic_judge``.
+    """
+
+    def __init__(
+        self,
+        stack: Optional[GovernedStack] = None,
+        *,
+        semantic_judge: Optional[BioSemanticJudge] = None,
+    ) -> None:
         if stack is not None:
             self.stack = stack
         else:
             self.stack = self._build_default_stack()
+        if semantic_judge is None:
+            semantic_judge = DEFAULT_JUDGE
+        if not isinstance(semantic_judge, BioSemanticJudge):
+            raise TypeError("semantic_judge must be a BioSemanticJudge")
+        self.semantic_judge = semantic_judge
         self._token_cache: Dict[tuple, str] = {}
 
     @staticmethod
@@ -135,43 +150,34 @@ class GovernedBio:
             human_subjects=human_subjects,
             dual_use_flag=dual_use_flag,
         )
-        policy, semantic = classify_bio_with_semantic(
+        request = BioRequest(
             purpose=purpose,
             domain=domain,
             intervention_class=intervention_class,
             summary=summary,
-            risk_notes=risk_notes,
             subject_scope=subject_scope,
+            risk_notes=risk_notes,
             authority_role=authority_role,
             irreversible=irreversible,
             human_subjects=human_subjects,
             dual_use_flag=dual_use_flag,
         )
         token = self.issue_token(user, role)
-        govern_opts = {}
-        if approval_voucher:
-            govern_opts["approval_voucher"] = approval_voucher
-        env = await self.stack.govern(intent, token, **govern_opts)
-        stack_decision = str(env.get("decision", "BLOCK"))
-        decision, bio_reasons, bio_code = tighten_decision(stack_decision, policy)
-
-        decision, bio_reasons, bio_code, voucher_honored = apply_bio_voucher_honor(
+        # Single bio pipeline: semantic judge -> govern -> voucher honor ->
+        # judgement audit row -> REVIEW enqueue (see bio_semantic_judge).
+        out = await govern_bio_request(
+            self.stack,
+            intent,
+            token,
+            request,
             approval_voucher=approval_voucher,
-            stack_decision=stack_decision,
-            policy=policy,
-            env_reasons=env.get("reasons"),
-            decision=decision,
-            bio_reasons=bio_reasons,
-            bio_code=bio_code,
+            judge=self.semantic_judge,
         )
-
-        # Overlay REVIEW on an ALLOW audit row never hit review_queue — enqueue.
+        env = out.env
+        decision = out.decision
+        bio_reasons = out.bio_reasons
+        bio_code = out.error_code
         entry_id = env.get("entry_id")
-        queued = False
-        if decision == "REVIEW" and entry_id:
-            queued = enqueue_bio_overlay_review(
-                getattr(self.stack, "engine", None), entry_id
-            )
 
         ok = decision == "ALLOW"
         merged_reasons = list(env.get("reasons") or [])
@@ -194,12 +200,12 @@ class GovernedBio:
             "irreversible": bool(irreversible),
             "human_subjects": bool(human_subjects),
             "dual_use_flag": bool(dual_use_flag),
-            "bio_policy": policy.as_dict(),
-            "bio_semantic": semantic.as_dict(),
+            "bio_policy": out.policy.as_dict(),
+            "bio_semantic": out.semantic,
             "blocked_run": not ok,
             "error_code": bio_code or env.get("error_code"),
-            "review_enqueued": queued,
-            "voucher_honored": voucher_honored,
+            "review_enqueued": out.review_enqueued,
+            "voucher_honored": out.voucher_honored,
         }
         return result
 
