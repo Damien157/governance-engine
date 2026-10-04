@@ -14,14 +14,14 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 |-------|--------|
 | Branch | `fix/bio-ci-kernel-snapshot` (off `main` @ `495b294`) |
 | Kernel | `src/governed_stack/bio_semantic_overlay.py`: no longer byte-for-byte (was sha256 `aab42764…9c89`). Only change: `snapshot_scores` + `_score` merges from the snapshot |
-| CI | New `ci.yml` step runs pytest over the 11 `tests/` files the unittest runner never ran |
+| CI | `scripts/run_all_works_tests.py` (the `ci.yml` suite step) now also runs pytest over the 11 `tests/` files its unittest list never ran; `ci.yml` itself unchanged |
 | Label | **Reported** until Damien reviews and merges |
 
 ### What changed
 
 - **Raw-kernel TOCTOU closed.** `_score` used to call `validate_scores(scores)` (which itself read each label twice: `label in scores`, then `scores[label]`) and then re-read `scores[label]` to merge. A mapping returning valid values on the checked reads and NaN/negative on the merge read was `max()`-ed to 0.0, so a validated 0.9 came out ALLOW. A mapping returning NaN on the *first* read only also came out ALLOW (the `in` check consumed it). Now each label is read exactly once into a plain dict of floats, that snapshot is validated (finite, in [0, 1], all labels present, same error strings as before), and the merge uses only the snapshot. `validate_scores` delegates to the same snapshot. The raw kernel now matches the adapter.
 - **Tests.** Strict xfail `test_i5_raw_kernel_rugpull_toctou_gap_documented` flipped to `test_i5_raw_kernel_closes_rugpull_toctou` (passing). New raw-kernel regressions: read-at-most-once counting, bad-first-read (NaN / -0.1 / 1.5 / inf) fails closed, flip-after-first-read decides on the snapshot, thresholds/tighten-only unchanged.
-- **CI.** pytest step for `test_audit_projection`, `test_bio_authority_jwt`, `test_bio_governance`, `test_bio_semantic`, `test_bio_semantic_judge`, `test_bio_semantic_overlay`, `test_governed_algorithm`, `test_lie_and_constraints`, `test_quantum_line`, `test_safety_sim`, `test_spectral_audit`.
+- **CI.** Runner phase 2 (pytest) for `test_audit_projection`, `test_bio_authority_jwt`, `test_bio_governance`, `test_bio_semantic`, `test_bio_semantic_judge`, `test_bio_semantic_overlay`, `test_governed_algorithm`, `test_lie_and_constraints`, `test_quantum_line`, `test_safety_sim`, `test_spectral_audit`.
 
 ### Accepted residuals
 
