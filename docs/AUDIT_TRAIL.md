@@ -8,6 +8,30 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## fix/bio-ci-kernel-snapshot — kernel score snapshot + bio tests in CI (**Reported**, PR open)
+
+| Field | Value |
+|-------|--------|
+| Branch | `fix/bio-ci-kernel-snapshot` (off `main` @ `495b294`) |
+| Kernel | `src/governed_stack/bio_semantic_overlay.py`: no longer byte-for-byte (was sha256 `aab42764…9c89`). Only change: `snapshot_scores` + `_score` merges from the snapshot |
+| CI | New `ci.yml` step runs pytest over the 11 `tests/` files the unittest runner never ran |
+| Label | **Reported** until Damien reviews and merges |
+
+### What changed
+
+- **Raw-kernel TOCTOU closed.** `_score` used to call `validate_scores(scores)` (which itself read each label twice: `label in scores`, then `scores[label]`) and then re-read `scores[label]` to merge. A mapping returning valid values on the checked reads and NaN/negative on the merge read was `max()`-ed to 0.0, so a validated 0.9 came out ALLOW. A mapping returning NaN on the *first* read only also came out ALLOW (the `in` check consumed it). Now each label is read exactly once into a plain dict of floats, that snapshot is validated (finite, in [0, 1], all labels present, same error strings as before), and the merge uses only the snapshot. `validate_scores` delegates to the same snapshot. The raw kernel now matches the adapter.
+- **Tests.** Strict xfail `test_i5_raw_kernel_rugpull_toctou_gap_documented` flipped to `test_i5_raw_kernel_closes_rugpull_toctou` (passing). New raw-kernel regressions: read-at-most-once counting, bad-first-read (NaN / -0.1 / 1.5 / inf) fails closed, flip-after-first-read decides on the snapshot, thresholds/tighten-only unchanged.
+- **CI.** pytest step for `test_audit_projection`, `test_bio_authority_jwt`, `test_bio_governance`, `test_bio_semantic`, `test_bio_semantic_judge`, `test_bio_semantic_overlay`, `test_governed_algorithm`, `test_lie_and_constraints`, `test_quantum_line`, `test_safety_sim`, `test_spectral_audit`.
+
+### Accepted residuals
+
+- GitHub Actions still blocked remotely by the account billing lock; green is local only.
+- `ruff` / `mypy` are unpinned in the dev extras.
+- `decide()` is still a pure function over an already-validated mapping; external callers that validate and then call `decide` on a live mapping must snapshot first (use `snapshot_scores`).
+- `hais/hais_tests`, `haven2/tests`, `imprint/tests` are not in CI (out of scope; `hais/hais_tests/test_zk_proofs.py` has a broken import).
+
+---
+
 ## Bio semantic judge adapter (**Reported**, local branch, source review pending)
 
 | Field | Value |
@@ -31,7 +55,7 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ### Findings / accepted residuals
 
-- **Raw-kernel TOCTOU (adapter closes it; kernel not modified).** `_score` validates a mapping and then re-reads it. If the re-read gives NaN or a negative number, `max()` turns it into 0.0, so a validated 0.9 can come out as ALLOW. Tracked by the strict-xfail test `test_i5_raw_kernel_rugpull_toctou_gap_documented`. Suggested kernel fix: snapshot `scores = dict(scores)` before `validate_scores`.
+- **Raw-kernel TOCTOU (adapter closes it; kernel not modified). Closed in the kernel by `fix/bio-ci-kernel-snapshot`.** `_score` validates a mapping and then re-reads it. If the re-read gives NaN or a negative number, `max()` turns it into 0.0, so a validated 0.9 can come out as ALLOW. Tracked by the strict-xfail test `test_i5_raw_kernel_rugpull_toctou_gap_documented`. Suggested kernel fix: snapshot `scores = dict(scores)` before `validate_scores`.
 - The stub is still phrase-heuristic. A benign cue (e.g. "published paper") checked first can mask a later harm cue (PR #19 residual, unchanged).
 - Judgement rows use a non-decision label (not counted by `storage.stats()`). Audit consumers must look for `BIO_SEMANTIC_JUDGEMENT`.
 - Running classifier threads cannot be cancelled on timeout. The kernel's bounded pool fails closed (REVIEW) once it is wedged.

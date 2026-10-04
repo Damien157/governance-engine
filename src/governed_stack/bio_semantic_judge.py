@@ -1,6 +1,6 @@
 """Bio semantic judge — adapter between the bio channel and the overlay kernel.
 
-The kernel (``bio_semantic_overlay``, user-authored, vendored verbatim) owns
+The kernel (``bio_semantic_overlay``, user-authored, vendored) owns
 the decision logic: validated scores -> ALLOW / REVIEW / BLOCK, tighten-only
 against the structural decision, fail closed on any classifier problem. This
 module only *wires* it into the governed bio channel:
@@ -30,6 +30,8 @@ module only *wires* it into the governed bio channel:
 5. Fail closed. Classifier output is snapshotted (each required label read
    exactly once, into a plain dict) before the kernel validates it. A mapping
    that changes between validation and use therefore cannot slip past.
+   The kernel now snapshots the same way (``snapshot_scores``), so the raw
+   kernel and the adapter behave identically on such mappings.
    Exceptions from the kernel call itself, or an outcome that is malformed or
    looser than structural, give a REVIEW floor (BLOCK if the structural state
    is unknown).
