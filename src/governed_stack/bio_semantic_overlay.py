@@ -12,6 +12,11 @@ Design
 * fail closed: any classifier error, timeout, malformed or non-finite score,
   missing label, or oversized input yields at least REVIEW. An unknown
   structural state yields BLOCK.
+* one read per label: classifier scores are snapshotted (each required label
+  read exactly once into a plain dict of floats) before validation; the
+  decision is computed only from that snapshot, never by re-reading the
+  caller's mapping. A mapping that changes between reads cannot pass
+  validation with one value and be decided on another.
 * no raw text in outputs: the audit record carries a SHA-256 of the text,
   never the text itself. Classifier "reasons" are untrusted model output and
   are sanitised and length-capped before they are returned.
@@ -154,19 +159,44 @@ def classify_text_llm(text: str) -> SemanticScores:
 # Pure decision logic
 # --------------------------------------------------------------------------
 
-def validate_scores(scores: object) -> Optional[str]:
-    """Return None if scores are usable, else a short machine-readable error."""
+def snapshot_scores(
+    scores: object,
+) -> Tuple[Optional[Dict[str, float]], Optional[str]]:
+    """Read each required label exactly once and validate that copy.
+
+    Returns ``(snapshot, None)`` where ``snapshot`` is a plain ``dict`` of
+    finite floats in [0, 1] for every label in REQUIRED_LABELS, or
+    ``(None, error)`` with a short machine-readable error. The caller's
+    mapping is never read again, so validation and decision always see the
+    same values (no time-of-check / time-of-use gap).
+    """
     if not isinstance(scores, Mapping):
-        return "scores_not_mapping"
+        return None, "scores_not_mapping"
+    snap: Dict[str, float] = {}
     for label in sorted(REQUIRED_LABELS):
-        if label not in scores:
-            return f"missing_label:{label}"
-        v = scores[label]
+        try:
+            v = scores[label]  # the only read of this label
+        except KeyError:
+            return None, f"missing_label:{label}"
         if isinstance(v, bool) or not isinstance(v, numbers.Real):
-            return f"non_numeric:{label}"
-        if not math.isfinite(v) or not (0.0 <= v <= 1.0):
-            return f"out_of_range:{label}"
-    return None
+            return None, f"non_numeric:{label}"
+        try:
+            f = float(v)
+        except (TypeError, ValueError, OverflowError):
+            return None, f"non_numeric:{label}"
+        if not math.isfinite(f) or not (0.0 <= f <= 1.0):
+            return None, f"out_of_range:{label}"
+        snap[label] = f
+    return snap, None
+
+
+def validate_scores(scores: object) -> Optional[str]:
+    """Return None if scores are usable, else a short machine-readable error.
+
+    Reads each label once (see ``snapshot_scores``). Code that goes on to use
+    the values must use the snapshot rather than re-reading ``scores``.
+    """
+    return snapshot_scores(scores)[1]
 
 
 def decide(scores: Mapping[str, float], cfg: OverlayConfig = DEFAULT_CONFIG
@@ -255,12 +285,12 @@ def _score(
             return None, [], "classifier_not_implemented"
         except Exception as e:  # message deliberately not propagated
             return None, [], f"classifier_error:{type(e).__name__}"
-        scores = getattr(result, "scores", None)
-        err = validate_scores(scores)
-        if err:
+        # One snapshot per result: validate it and merge from it only.
+        snap, err = snapshot_scores(getattr(result, "scores", None))
+        if snap is None:
             return None, [], f"invalid_scores:{err}"
         for label in REQUIRED_LABELS:
-            merged[label] = max(merged[label], float(scores[label]))
+            merged[label] = max(merged[label], snap[label])
         rs = getattr(result, "reasons", None)
         if isinstance(rs, (list, tuple)):
             reasons.extend(rs)
