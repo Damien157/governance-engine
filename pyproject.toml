@@ -47,7 +47,8 @@ select = ["E", "F", "I"]
 ignore = ["E501", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
-# User-authored overlay kernel, vendored byte-for-byte; keep it unmodified.
+# User-authored overlay kernel, vendored; only change since vendoring is the
+# score-snapshot (TOCTOU) fix. Keep other edits out so it stays reviewable.
 "src/governed_stack/bio_semantic_overlay.py" = ["I001"]
 
 # mypy gates src/governed_stack only (not the certified_governance_unified monolith).
@@ -77,7 +78,8 @@ module = [
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-# User-authored overlay kernel, vendored byte-for-byte; keep it unmodified.
+# User-authored overlay kernel, vendored; only change since vendoring is the
+# score-snapshot (TOCTOU) fix. Keep other edits out so it stays reviewable.
 # Narrow: only the two codes it trips (numbers.Real compare, getattr index).
 module = ["governed_stack.bio_semantic_overlay"]
 disable_error_code = ["operator", "index"]

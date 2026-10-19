@@ -62,7 +62,9 @@ from governed_stack.bio_semantic_overlay import (
     SemanticDecision,
     SemanticScores,
     classify_text_llm,
+    decide,
     evaluate_overlay,
+    tighten,
 )
 
 ALLOW, REVIEW, BLOCK = SemanticDecision.ALLOW, SemanticDecision.REVIEW, SemanticDecision.BLOCK
@@ -615,18 +617,50 @@ def _raise_after(key, value):
     raise KeyError(key)
 
 
-def test_i5_rugpull_raw_kernel_raise_hits_outer_fail_reason():
+def test_i5_rugpull_raw_kernel_raise_on_later_read_is_never_reached():
     """Equivalent of the reported RugPullMapping test (raw kernel, no adapter).
 
-    Valid for both validation reads, raises on the merge read. That escapes
-    ``_score`` and lands in evaluate_overlay's outer ``internal_error`` path.
+    The mapping is valid for its first two reads per key and raises after.
+    Before the kernel snapshot fix, ``_score`` re-read it on merge, so the
+    raise escaped into the outer ``internal_error`` path (REVIEW). The kernel
+    now reads each label exactly once, so the later read never happens and
+    the validated 0.9 is what gets decided: BLOCK (stricter than before).
     """
-    o = evaluate_overlay(
-        ALLOW, NEUTRAL,
-        classifier=lambda t: SemanticScores(RugPullMapping(_RUG_BASE, _raise_after), []),
-    )
+    m = RugPullMapping(_RUG_BASE, _raise_after)
+    o = evaluate_overlay(ALLOW, NEUTRAL, classifier=lambda t: SemanticScores(m, []))
+    assert o.decision is BLOCK
+    assert o.fail_reason is None
+    assert o.scores["synthesis_howto"] == pytest.approx(0.9)
+    assert m.reads == {label: 1 for label in REQUIRED_LABELS}
+
+
+def test_i5_raw_kernel_raise_on_first_read_hits_outer_fail_reason():
+    """A non-KeyError raised while reading scores escapes ``_score`` and lands
+    in evaluate_overlay's outer ``internal_error`` path: fail closed (REVIEW)."""
+
+    class Boom(Mapping):
+        def __getitem__(self, key):
+            if key == "synthesis_howto":
+                raise RuntimeError("mid-snapshot")
+            return 0.0
+
+        def __iter__(self):
+            return iter(REQUIRED_LABELS)
+
+        def __len__(self):
+            return len(REQUIRED_LABELS)
+
+    o = evaluate_overlay(ALLOW, NEUTRAL, classifier=lambda t: SemanticScores(Boom(), []))
     assert o.decision is REVIEW
-    assert o.fail_reason == "internal_error:KeyError"
+    assert o.fail_reason == "internal_error:RuntimeError"
+
+
+def test_i5_raw_kernel_keyerror_on_first_read_is_missing_label():
+    """KeyError on the (only) read of a label means the label is missing."""
+    m = RugPullMapping(_RUG_BASE, _raise_after, n=0)
+    o = evaluate_overlay(ALLOW, NEUTRAL, classifier=lambda t: SemanticScores(m, []))
+    assert o.decision is REVIEW
+    assert o.fail_reason == f"invalid_scores:missing_label:{sorted(REQUIRED_LABELS)[0]}"
 
 
 def test_i5_rugpull_raise_mid_snapshot_fails_closed_through_adapter():
@@ -678,17 +712,28 @@ def test_i5_rugpull_scores_attribute_changes_between_reads():
     assert j.policy.decision == "BLOCK"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Known raw-kernel gap (adapter closes it, see test_i5_adapter_closes_rugpull_toctou): "
-    "_score validates then re-reads the mapping; NaN/negative on the re-read is "
-    "max()-ed away to 0.0 -> ALLOW. Flip this test when the kernel snapshots scores."
-))
-def test_i5_raw_kernel_rugpull_toctou_gap_documented():
-    o = evaluate_overlay(
-        ALLOW, NEUTRAL,
-        classifier=lambda t: SemanticScores(RugPullMapping(_RUG_BASE, lambda k, v: float("nan")), []),
-    )
+@pytest.mark.parametrize("n", [1, 2], ids=["valid_1_read", "valid_2_reads"])
+@pytest.mark.parametrize(
+    "after",
+    [lambda k, v: float("nan"), lambda k, v: -5.0, lambda k, v: 0.0, _raise_after],
+    ids=["nan", "negative", "zero", "raise"],
+)
+def test_i5_raw_kernel_closes_rugpull_toctou(after, n):
+    """Formerly the strict-xfail ``test_i5_raw_kernel_rugpull_toctou_gap_documented``.
+
+    The raw kernel used to validate the mapping and then re-read it; a NaN or
+    negative value on the re-read was max()-ed away to 0.0, so a validated 0.9
+    came out as ALLOW. The kernel now snapshots each label once (same as the
+    adapter, see test_i5_adapter_closes_rugpull_toctou), so the validated
+    value is the decided value even without the adapter.
+    """
+    m = RugPullMapping(_RUG_BASE, after, n=n)
+    o = evaluate_overlay(ALLOW, NEUTRAL, classifier=lambda t: SemanticScores(m, []))
     assert o.decision is not ALLOW
+    assert o.decision is BLOCK
+    assert o.semantic is BLOCK
+    assert o.scores["synthesis_howto"] == pytest.approx(0.9)
+    assert m.reads == {label: 1 for label in REQUIRED_LABELS}
 
 
 def test_i5_snapshot_reads_each_label_once():
@@ -697,6 +742,168 @@ def test_i5_snapshot_reads_each_label_once():
     assert type(snap.scores) is dict and snap.scores["synthesis_howto"] == 0.9
     assert snap.reasons == ["ok"]
     assert all(c == 1 for c in m.reads.values())
+
+
+# --- Raw kernel snapshot regressions (no adapter in the path) -------------
+
+
+class CountingMapping(Mapping):
+    """Counts every per-label value read and every bulk read.
+
+    ``values_for(label, i)`` gives the value returned on the i-th (0-based)
+    read of ``label``, so tests can script values that change between reads.
+    """
+
+    def __init__(self, values_for):
+        self.values_for = values_for
+        self.reads = {}
+        self.bulk = {"items": 0, "values": 0, "keys": 0, "iter": 0}
+
+    def _read(self, key):
+        if key not in REQUIRED_LABELS:
+            raise KeyError(key)
+        i = self.reads.get(key, 0)
+        self.reads[key] = i + 1
+        return self.values_for(key, i)
+
+    def __getitem__(self, key):
+        return self._read(key)
+
+    def get(self, key, default=None):
+        try:
+            return self._read(key)
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        try:
+            self._read(key)
+        except KeyError:
+            return False
+        return True
+
+    def items(self):
+        self.bulk["items"] += 1
+        return super().items()
+
+    def values(self):
+        self.bulk["values"] += 1
+        return super().values()
+
+    def keys(self):
+        self.bulk["keys"] += 1
+        return super().keys()
+
+    def __iter__(self):
+        self.bulk["iter"] += 1
+        return iter(sorted(REQUIRED_LABELS))
+
+    def __len__(self):
+        return len(REQUIRED_LABELS)
+
+
+@pytest.mark.parametrize(
+    "first",
+    [_scores(), _scores(dual_use_adjacent=0.2), _scores(synthesis_howto=0.9)],
+    ids=["allow", "review", "block"],
+)
+def test_i5_raw_kernel_reads_each_label_at_most_once(first):
+    maps = []
+
+    def clf(text):
+        m = CountingMapping(lambda k, i: first[k])
+        maps.append(m)
+        return SemanticScores(m, [])
+
+    # Multi-chunk input: one mapping per chunk, each read once per label.
+    cfg = OverlayConfig(max_chunk_chars=100, chunk_overlap_chars=10, max_chunks=4)
+    o = evaluate_overlay(ALLOW, "x" * 250, classifier=clf, config=cfg)
+    assert o.chunks == len(maps) == 3
+    assert o.fail_reason is None
+    for m in maps:
+        assert m.reads == {label: 1 for label in REQUIRED_LABELS}
+        assert m.bulk == {"items": 0, "values": 0, "keys": 0, "iter": 0}
+
+
+def test_i5_validate_scores_reads_each_label_once():
+    from governed_stack.bio_semantic_overlay import snapshot_scores, validate_scores
+
+    m = CountingMapping(lambda k, i: 0.0)
+    assert validate_scores(m) is None
+    assert m.reads == {label: 1 for label in REQUIRED_LABELS}
+    m = CountingMapping(lambda k, i: 0.3)
+    snap, err = snapshot_scores(m)
+    assert err is None and type(snap) is dict
+    assert snap == {label: 0.3 for label in REQUIRED_LABELS}
+    assert m.reads == {label: 1 for label in REQUIRED_LABELS}
+
+
+@pytest.mark.parametrize("label", sorted(REQUIRED_LABELS))
+@pytest.mark.parametrize(
+    "bad", [float("nan"), -0.1, 1.5, float("inf")], ids=["nan", "neg", "gt1", "inf"]
+)
+@pytest.mark.parametrize("later", ["benign", "same"])
+def test_i5_raw_kernel_bad_first_read_fails_closed(label, bad, later):
+    """Bad value on the FIRST read fails closed, even if later reads look fine.
+
+    Before the fix, ``label in scores`` consumed the first read, so a mapping
+    that returned NaN/out-of-range first and 0.0 afterwards validated clean
+    and came out ALLOW.
+    """
+
+    def values_for(k, i):
+        if k != label:
+            return 0.0
+        if i == 0 or later == "same":
+            return bad
+        return 0.0
+
+    m = CountingMapping(values_for)
+    o = evaluate_overlay(ALLOW, NEUTRAL, classifier=lambda t: SemanticScores(m, []))
+    assert o.decision is not ALLOW
+    assert o.decision is REVIEW
+    assert o.semantic is None and o.scores is None
+    assert o.fail_reason == f"invalid_scores:out_of_range:{label}"
+    assert m.reads[label] == 1
+
+
+@pytest.mark.parametrize("label", sorted(REQUIRED_LABELS))
+def test_i5_raw_kernel_flip_after_first_read_uses_snapshot(label):
+    """Benign on the first read, high-risk on every later read.
+
+    The kernel must decide on exactly the values it validated (the first
+    read), never on a mix of reads. Before the fix the merge re-read picked
+    up the later 0.9, so the reported scores differed from the validated ones.
+    """
+    m = CountingMapping(lambda k, i: 0.0 if i == 0 else (0.9 if k == label else 0.0))
+    o = evaluate_overlay(ALLOW, NEUTRAL, classifier=lambda t: SemanticScores(m, []))
+    snapshot = {k: 0.0 for k in REQUIRED_LABELS}
+    assert dict(o.scores) == snapshot
+    assert o.semantic is decide(snapshot)
+    assert o.decision is tighten(ALLOW, decide(snapshot))
+    assert o.fail_reason is None
+    assert m.reads == {k: 1 for k in REQUIRED_LABELS}
+
+
+def test_i5_raw_kernel_snapshot_keeps_tighten_only_and_thresholds():
+    """Snapshot path keeps the existing thresholds and tighten-only merge."""
+    cases = [
+        (_scores(), ALLOW, ALLOW),
+        (_scores(dual_use_adjacent=0.149), ALLOW, ALLOW),
+        (_scores(dual_use_adjacent=0.15), ALLOW, REVIEW),
+        (_scores(uncertain=0.5), ALLOW, REVIEW),
+        (_scores(dual_use_adjacent=0.69), ALLOW, REVIEW),
+        (_scores(dual_use_adjacent=0.70), ALLOW, BLOCK),
+        (_scores(enhancement=0.49), ALLOW, REVIEW),
+        (_scores(enhancement=0.50), ALLOW, BLOCK),
+        (_scores(synthesis_howto=0.50), ALLOW, BLOCK),
+        (_scores(), REVIEW, REVIEW),  # semantic ALLOW never loosens REVIEW
+    ]
+    for first, structural, expected in cases:
+        m = CountingMapping(lambda k, i, first=first: first[k] if i == 0 else 0.0)
+        o = evaluate_overlay(structural, NEUTRAL, classifier=lambda t: SemanticScores(m, []))
+        assert o.decision is expected, (first, structural)
+        assert o.decision.severity >= structural.severity
 
 
 def test_i5_kernel_call_exception_fails_closed(monkeypatch):
