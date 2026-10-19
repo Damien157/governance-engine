@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run the unified all-works suite (+ core live adapter tests).
 
+Phase 1: unittest over a fixed module list (output unchanged).
+Phase 2: pytest over the pytest-style files unittest cannot run.
+Exit code is non-zero if either phase fails.
+
 Note: put repo root ahead of hais/ so `tests` resolves to ./tests.
 # (hais/tests was renamed to hais/hais_tests to avoid package shadowing.)
 """
@@ -55,7 +59,28 @@ def main() -> int:
     cmd = [sys.executable, "-m", "unittest", *modules, "-v"]
     print("Running:", " ".join(modules))
     proc = subprocess.run(cmd, cwd=str(ROOT), env=env)
-    return proc.returncode
+
+    # pytest-style files (fixtures / parametrize / xfail) that unittest cannot
+    # run. Every tests/test_*.py must be in exactly one of the two lists.
+    # pytest picks up pythonpath from [tool.pytest.ini_options].
+    pytest_files = [
+        "tests/test_audit_projection.py",
+        "tests/test_bio_authority_jwt.py",
+        "tests/test_bio_governance.py",
+        "tests/test_bio_semantic.py",
+        "tests/test_bio_semantic_judge.py",
+        "tests/test_bio_semantic_overlay.py",
+        "tests/test_governed_algorithm.py",
+        "tests/test_lie_and_constraints.py",
+        "tests/test_quantum_line.py",
+        "tests/test_safety_sim.py",
+        "tests/test_spectral_audit.py",
+    ]
+    py_cmd = [sys.executable, "-m", "pytest", "-q", *pytest_files]
+    print("Running (pytest):", " ".join(pytest_files), flush=True)
+    py_proc = subprocess.run(py_cmd, cwd=str(ROOT), env=env)
+
+    return proc.returncode or py_proc.returncode
 
 
 if __name__ == "__main__":
