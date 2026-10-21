@@ -10,7 +10,7 @@ fast:
     rejection): fast, always run.
   - Full range-proof / engine-integration tests: marked slow, skipped by
     default. Run them explicitly with:
-        ZK_RUN_SLOW=1 python -m unittest tests.test_zk_proofs -v
+        ZK_RUN_SLOW=1 python -m unittest hais_tests.test_zk_proofs -v
     or, under pytest, register the marker in pytest.ini (included
     alongside this file) and run:
         pytest -m slow tests/test_zk_proofs.py
@@ -29,7 +29,7 @@ import zk_enhanced_governance as zk
 from zk_enhanced_governance import ZKEnhancedGovernanceEngine, ClaimType
 from certified_governance import CertifiedGovernanceEngine, CryptoEngine
 
-import tests.test_certified_engine as base  # tmp_db(), SharedCryptoTestCase
+import hais_tests.test_certified_engine as base  # tmp_db(), SharedCryptoTestCase
 
 SLOW = unittest.skipUnless(
     os.environ.get("ZK_RUN_SLOW") == "1",
