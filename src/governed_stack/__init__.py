@@ -81,6 +81,7 @@ from .quantum_line import (
     quantum_from_hais_envelope,
 )
 from .runtime_bridge import GovernedDecisionEngine
+from .sealed_mail import DraftPayload, SealedMailAdapter
 from .sidecar import (
     RateLimiter,
     SidecarService,
@@ -117,6 +118,8 @@ __all__ = [
     "MockToolInvoker",
     "ToolInvoker",
     "GovernedMail",
+    "SealedMailAdapter",
+    "DraftPayload",
     "GovernedCalendar",
     "GovernedPost",
     "GovernedAlgorithm",

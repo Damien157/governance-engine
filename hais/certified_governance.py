@@ -481,9 +481,17 @@ class AuditStorage:
         trace_id: Optional[str] = None,
         engine_version: str = "CertifiedGovernanceEngine v1.0",
         environment_id: str = "default",
+        enqueue_review: bool = True,
     ) -> str:
         """
         Log a governed decision into the audit chain.
+
+        ``enqueue_review=False`` records a REVIEW row *without* adding it to
+        ``review_queue`` (atomic: no PENDING window). Use it for terminal
+        channel stops that must never be human-approvable into a voucher,
+        e.g. a bio-sealed mail REVIEW whose row carries only hashes.
+        Default (True) keeps the existing behavior. Kept in line with
+        certified_governance_unified.AuditStorage.log_decision.
         """
         entry_id = str(uuid.uuid4())
         ts = time.time()
@@ -536,7 +544,7 @@ class AuditStorage:
                     environment_id,
                 ),
             )
-            if decision == "REVIEW":
+            if decision == "REVIEW" and enqueue_review:
                 # Same connection, same transaction as the INSERT above --
                 # committed together, so the audit log and the review
                 # queue can never disagree about whether this entry is
@@ -734,6 +742,7 @@ class AuditStorage:
             SELECT COUNT(*) total,
                    SUM(CASE WHEN decision='ALLOW' THEN 1 ELSE 0 END) allowed,
                    SUM(CASE WHEN decision='BLOCK' THEN 1 ELSE 0 END) blocked,
+                   SUM(CASE WHEN decision='REVIEW' THEN 1 ELSE 0 END) reviewed,
                    AVG(verification_score) avg_verification
             FROM audit_log WHERE timestamp > ?
             """,
@@ -743,6 +752,7 @@ class AuditStorage:
             "total": row["total"] or 0,
             "allowed": row["allowed"] or 0,
             "blocked": row["blocked"] or 0,
+            "reviewed": row["reviewed"] or 0,
             "avg_verification_score": row["avg_verification"] or 0.0,
         }
 

@@ -106,6 +106,20 @@ class TestBasicGovernance(SharedCryptoTestCase):
         self.assertEqual(resolution["final_decision"], "ALLOW")
         self.assertTrue(engine.storage.verify_chain()["valid"])
 
+    async def test_log_decision_enqueue_review_flag(self):
+        storage = self.make_engine().storage
+        common = dict(
+            intent={"action": "probe"}, result="r", verification_score=1.0,
+            risk_signal=0.5, anomaly_signal=0.0, policy_reasons=["p"], metadata={},
+        )
+        queued = storage.log_decision(decision="REVIEW", **common)
+        unqueued = storage.log_decision(decision="REVIEW", enqueue_review=False, **common)
+        pending = {r["entry_id"] for r in storage.list_pending_reviews()}
+        self.assertIn(queued, pending)
+        self.assertNotIn(unqueued, pending)
+        self.assertEqual(storage.stats()["reviewed"], 2)
+        self.assertTrue(storage.verify_chain()["valid"])
+
 class TestPerUserRateLimiter(unittest.TestCase):
     """No crypto involved — already cheap, nothing to share."""
 
