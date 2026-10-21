@@ -6,7 +6,7 @@ GovernedActionBus: mutation facade — require_allow before any side_effect (no 
 Sketches stay importable via HavenUnified helpers but off the decision path.
 """
 
-__version__ = "0.6.2"
+__version__ = "0.7.0"
 
 
 from .action_bus import (
@@ -30,12 +30,15 @@ from .connectors import (
     MockCalendarWriter,
     MockMailSender,
     MockSocialPublisher,
+    MockToolInvoker,
     SocialPublisher,
+    ToolInvoker,
     assert_bound_content,
     bus_bio_side_effect,
     bus_calendar_side_effect,
     bus_mail_side_effect,
     bus_social_side_effect,
+    bus_tool_side_effect,
 )
 from .contracts import (
     GOV_AUTH_FAILED,
@@ -91,6 +94,7 @@ from .social import GovernedOutboundText, GovernedPost, PostBlocked
 from .social import intent_for_scan as social_intent_for_scan
 from .spectral_audit import attach_spectrum, build_spectrum
 from .stack import GovernedStack, ensure_import_paths
+from .tool import GovernedTool, ToolBlocked, intent_sha256
 from .unified import GovernedUnified, HavenUnified
 
 __all__ = [
@@ -109,11 +113,18 @@ __all__ = [
     "bus_calendar_side_effect",
     "bus_social_side_effect",
     "bus_bio_side_effect",
+    "bus_tool_side_effect",
+    "MockToolInvoker",
+    "ToolInvoker",
     "GovernedMail",
     "GovernedCalendar",
     "GovernedPost",
     "GovernedAlgorithm",
     "GovernedBio",
+    "ToolInvoker",
+    "intent_sha256",
+    "ToolBlocked",
+    "GovernedTool",
     "BioBlocked",
     "attach_quantum",
     "attach_spectrum",

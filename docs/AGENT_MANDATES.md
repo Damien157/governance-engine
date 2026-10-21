@@ -1,4 +1,4 @@
-# Agent mandates / constitution (0.6.2)
+# Agent mandates / constitution (0.7.0)
 
 Every bot, channel adapter, and automation that touches outbound side effects
 must obey this constitution. **No bypass.**
@@ -38,7 +38,7 @@ must obey this constitution. **No bypass.**
 | **mail** | Send via bus `side_effect` + `MailSender` (mock in tests) | BLOCK/REVIEW → human; never Gmail outside bus |
 | **calendar** | Create/update via `CalendarWriter` side_effect | BLOCK/REVIEW → human |
 | **social** | Publish via `SocialPublisher` side_effect | BLOCK/REVIEW → human |
-| **tool** | Intent through bus `tool` channel; side_effect only on ALLOW | Invalid / BLOCK / REVIEW → refuse |
+| **tool** | `GovernedTool` / bus `tool` + `bus_tool_side_effect(ToolInvoker)`; envelope binds `action`/`intent`/`intent_sha256` | Invalid / BLOCK / REVIEW → refuse; never invoke outside bus |
 | **bio** | Metadata / ticket logging mock only — **no** wet-lab, sequences, protocols, `/v1/execute` | BLOCK → refuse; REVIEW → human `resolve_review` then re-check with voucher (HARD BLOCK still blocked) |
 
 ## Bio gate limits (honesty)
@@ -71,6 +71,6 @@ Bypass: forbidden — connectors only in side_effects
 ## Related
 
 - Per-channel agent notes: `src/governed_stack/AGENT_MAIL.md`,
-  `AGENT_CALENDAR.md`, `AGENT_SOCIAL.md`, `AGENT_ALGORITHM.md`
+  `AGENT_CALENDAR.md`, `AGENT_SOCIAL.md`, `AGENT_TOOL.md`, `AGENT_ALGORITHM.md`
 - Roadmap: [`FULL_GOVERNANCE_ROADMAP.md`](FULL_GOVERNANCE_ROADMAP.md)
 - Bio OS: [`BIO_GOVERNANCE_OS.md`](BIO_GOVERNANCE_OS.md)
