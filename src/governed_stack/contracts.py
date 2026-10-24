@@ -483,6 +483,43 @@ _CHANNEL_ACTIONS = {
 }
 
 
+_ALGO_PAYLOAD_SCAN_KEYS = (
+    "purpose",
+    "summary",
+    "time_cost",
+    "space_cost",
+    "energy_cost",
+    "speedup",
+    "risk_notes",
+    "security_margin",
+)
+
+
+def _fold_algorithm_payload(raw: dict) -> dict:
+    """Keep scan fields a caller put under ``payload`` for a run_algorithm intent.
+
+    ``AlgorithmScanPayload`` only models ``subject``/``text`` and ignores other
+    keys, so ``{"action": "run_algorithm", "payload": {"purpose": ...}}`` used to
+    reach the policy engine with an EMPTY payload (purpose silently dropped, so
+    nothing could be scanned). Fold scan-field keys (and any subject/text) from
+    the payload into the top-level scan form so they are scanned and echoed.
+    """
+    payload = raw.get("payload")
+    if not isinstance(payload, dict) or not any(k in payload for k in _ALGO_PAYLOAD_SCAN_KEYS):
+        return raw
+
+    def _join(*parts: Any) -> str:
+        return "\n".join(str(x) for x in parts if x not in (None, ""))
+
+    out = {k: v for k, v in raw.items() if k != "payload"}
+    for k in _ALGO_PAYLOAD_SCAN_KEYS:
+        if k in payload and k not in ("purpose", "summary"):
+            out.setdefault(k, payload[k])
+    out["purpose"] = _join(out.get("purpose"), payload.get("purpose"), payload.get("subject"))
+    out["summary"] = _join(out.get("summary"), payload.get("summary"), payload.get("text"))
+    return out
+
+
 def parse_intent(raw: dict) -> GovernIntent:
     """Parse a raw dict into GovernIntent (or channel subclass). Raises IntentValidationError."""
     if not isinstance(raw, dict):
@@ -550,6 +587,7 @@ def parse_intent(raw: dict) -> GovernIntent:
             return SocialScanIntent.model_validate(raw)
         if model_cls is AlgorithmScanIntent:
             _reject_forbidden_scan_keys(raw, ALGORITHM_SCAN_FORBIDDEN, where="algorithm")
+            raw = _fold_algorithm_payload(raw)
             if ("purpose" in raw or "summary" in raw) and "payload" not in raw:
                 return AlgorithmScanIntent.from_scan(
                     purpose=str(raw.get("purpose", "")),
