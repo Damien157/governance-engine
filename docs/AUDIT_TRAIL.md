@@ -28,7 +28,31 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 ### Accepted residuals
 
 - Regex markers: paraphrase, obfuscation and non-English requests are not caught; this is a floor, not a classifier.
-- Mail/calendar/social intents passed through `GovernedTool` with non-contract payload keys (e.g. `payload.body`) still lose those keys before policy; use the channel adapters (`from_scan` forms).
+- ~~Mail/calendar/social intents passed through `GovernedTool` with non-contract payload keys (e.g. `payload.body`) still lose those keys before policy; use the channel adapters (`from_scan` forms).~~ **Closed** by `fix/tool-gate-content-fields` (see below).
+
+---
+
+## fix/tool-gate-content-fields — prose-channel content reaches the policy scan (**Reported**, PR open)
+
+| Field | Value |
+|-------|--------|
+| Branch | `fix/tool-gate-content-fields` (stacked on `test/all-works`, PR #26) |
+| Code | `src/governed_stack/contracts.py` (`parse_intent` + `_fold_prose_scan_fields`); no policy-engine change |
+| Tests | `tests/test_governed_tool_prose_fields.py` (area `tool_agent_0.7`) |
+| Label | **Reported** until Damien reviews and merges |
+
+### What changed
+
+- **Gap closed.** `send_email` / `calendar_write` / `publish_post` intents given to `GovernedTool` with content under non-contract keys (`payload.body`, `payload.message`, top-level `description`/`body`/`text`, ...) were reduced to the contract's `payload.subject`/`payload.text` by models with `extra="ignore"`, so the policy scanned an empty payload and ALLOWed. `parse_intent` now folds every content-bearing field into the contract's scanned `payload.subject` / `payload.text` (the existing `from_scan` mechanism): the channel's top-level aliases (mail `subject`/`body`/`text`/`message`/`content`/`html`; calendar `summary`/`title`/`description`/`notes`/`location`/`body`/`text`/`message`/`content`; social `text`/`body`/`message`/`content`/`title`/`platform`) and **every other free-text key under `payload`** (strings, and string leaves of nested lists/dicts; numbers/bools/None are not prose and are skipped).
+- **Secret keys still rejected.** `private_key`/`password`/`token`/`secret` (case-insensitive) at the top level or directly under `payload` of these three actions are now rejected with `scan_intent_forbids:*` → `GOV_INTENT_INVALID` (previously silently dropped), as are the channel routing keys (`to/cc/bcc/from`, `attendees/start/end`, `handles/urls/recipients`) and any of those keys nested inside a folded free-text value. Nothing is folded from a forbidden key.
+- **Exemptions unchanged.** The destructive content rules still skip `send_email`/`calendar_write`/`publish_post` (`exclude_actions`); CBRN BLOCK applies to these actions and now fires on content in any of the fields above. Destructive text in a mail/post/event is therefore still ALLOWed by the default policy (prose), but it is now scanned: a policy without the exemption BLOCKs it (tested).
+- **Hash behaviour.** Contract-conforming shapes (`payload.subject/text`, `from_scan` top-level forms) produce byte-identical govern dumps and `intent_sha256` (hashes pinned from pre-fix code in the tests). Identical fragments are de-duplicated. Intents that used the dropped keys now hash differently per content, i.e. the approval binds the body.
+
+### Accepted residuals
+
+- Mail/calendar/social content now also reaches the **PII** rules (email address / phone / SSN / "password" / "credit card" terms are not exempt), so a body that contains an email address or phone number is BLOCKed. Previously the same text sent under `payload.text` was already blocked; sending it under `payload.body` was the unscanned path.
+- Unknown top-level keys outside the alias lists (and non-dict `payload`) are still ignored/rejected by the model as before; only the aliases above and `payload` extras are folded.
+- Regex markers: paraphrase/obfuscation is not caught (unchanged).
 
 ---
 
