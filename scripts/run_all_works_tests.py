@@ -36,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # First matching pattern wins. A tests/test_*.py matching none is a coverage
 # problem (see coverage_problems()): add an area/pattern here for new files.
 AREAS: list[tuple[str, str]] = [
+    # Mathematics suite (docs/MATH_TESTS.md); listed first so it wins over the generic patterns below.
+    ("mathematics", r"test_math_(?!cores)"),
     ("sealed_mail", r"sealed_mail"),
     ("mail", r"governed_mail"),
     ("calendar", r"calendar"),
