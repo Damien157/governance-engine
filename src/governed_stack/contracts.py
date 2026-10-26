@@ -520,6 +520,133 @@ def _fold_algorithm_payload(raw: dict) -> dict:
     return out
 
 
+# Free-text aliases a caller may use for the contract's content fields, per
+# prose channel. Anything here (and any other free-text key under ``payload``)
+# is folded into the contract's scanned ``payload.subject`` / ``payload.text``
+# before policy runs, so it is scanned AND echoed (hash/bind) instead of being
+# dropped by the models' ``extra="ignore"``.
+_MAIL_SUBJECT_ALIASES = ("subject",)
+_MAIL_TEXT_ALIASES = ("body", "text", "message", "content", "html")
+_CAL_SUBJECT_ALIASES = ("summary", "title")
+_CAL_TEXT_ALIASES = ("description", "notes", "body", "text", "message", "content")
+_SOCIAL_SUBJECT_ALIASES = ("platform",)
+_SOCIAL_TEXT_ALIASES = ("text", "body", "message", "content", "title")
+_PROSE_PAYLOAD_STRUCTURAL = frozenset({"subject", "text"})
+_SECRET_KEYS_LOWER = frozenset(k.lower() for k in ALGORITHM_SCAN_FORBIDDEN)
+
+
+def _free_text_leaves(value: Any, forbidden: frozenset, where: str) -> List[str]:
+    """String leaves of *value* (str / nested list / dict) for scanning.
+
+    Non-string scalars (numbers, bools, None) are not prose and are skipped.
+    Raises IntentValidationError if a forbidden (routing/secret) key appears at
+    any depth: those must never ride along inside a scanned free-text field.
+    """
+    if isinstance(value, str):
+        return [value] if value else []
+    out: List[str] = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if isinstance(k, str) and k.lower() in forbidden:
+                raise IntentValidationError(
+                    f"scan_intent_forbids:{k}",
+                    errors=[{
+                        "loc": [where, "payload", k],
+                        "msg": f"scan_intent_forbids:{k}",
+                        "type": "forbidden_routing",
+                    }],
+                )
+            out.extend(_free_text_leaves(v, forbidden, where))
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            out.extend(_free_text_leaves(v, forbidden, where))
+    return out
+
+
+def _alias_text(value: Any, forbidden: frozenset, where: str) -> List[str]:
+    """Like _free_text_leaves, but a numeric value for a *named* content field
+    is kept (stringified), matching the old ``str(raw.get(...))`` behaviour."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [str(value)]
+    return _free_text_leaves(value, forbidden, where)
+
+
+def _reject_secret_keys(raw: dict, *, where: str) -> None:
+    """Secret keys are forbidden on prose-channel scan intents (top level or
+    directly under ``payload``, case-insensitive): rejected loudly, never
+    dropped or folded into scanned text."""
+    payload = raw.get("payload")
+    scopes = [(raw, [where])]
+    if isinstance(payload, dict):
+        scopes.append((payload, [where, "payload"]))
+    for data, loc in scopes:
+        for key in data:
+            if isinstance(key, str) and key.lower() in _SECRET_KEYS_LOWER:
+                raise IntentValidationError(
+                    f"scan_intent_forbids:{key}",
+                    errors=[{
+                        "loc": [*loc, key],
+                        "msg": f"scan_intent_forbids:{key}",
+                        "type": "forbidden_routing",
+                    }],
+                )
+
+
+def _has_prose_fields(raw: dict, aliases: tuple) -> bool:
+    """True when the intent carries any content field (so it must be folded)."""
+    if any(k in raw for k in aliases):
+        return True
+    return isinstance(raw.get("payload"), dict)
+
+
+def _join_unique(parts: List[str]) -> str:
+    seen: List[str] = []
+    for part in parts:
+        if part and part not in seen:
+            seen.append(part)
+    return "\n".join(seen)
+
+
+def _fold_prose_scan_fields(
+    raw: dict,
+    *,
+    where: str,
+    forbidden: frozenset,
+    subject_aliases: tuple,
+    text_aliases: tuple,
+) -> tuple:
+    """Fold every content-bearing field into ``(subject_text, body_text)``.
+
+    Sources: the contract's own fields (top-level aliases for the channel and
+    ``payload.subject`` / ``payload.text``) plus EVERY other free-text key under
+    ``payload`` (e.g. ``payload.body``). Secret keys (private_key / password /
+    token / secret) and the channel's routing keys are rejected, never folded.
+    Identical fragments are de-duplicated so the contract-conforming shapes keep
+    their exact govern dump (and ``intent_sha256``).
+    """
+    banned = frozenset(k.lower() for k in forbidden) | _SECRET_KEYS_LOWER
+    payload = raw.get("payload")
+    payload_d: Dict[str, Any] = payload if isinstance(payload, dict) else {}
+
+    subject_parts: List[str] = []
+    text_parts: List[str] = []
+    for k in subject_aliases:
+        if k in raw:
+            subject_parts.extend(_alias_text(raw[k], banned, where))
+    if "subject" in payload_d:
+        subject_parts.extend(_free_text_leaves(payload_d["subject"], banned, where))
+    if "text" in payload_d:
+        text_parts.extend(_free_text_leaves(payload_d["text"], banned, where))
+    for k in text_aliases:
+        if k in raw:
+            text_parts.extend(_alias_text(raw[k], banned, where))
+    for k, v in payload_d.items():
+        if k in _PROSE_PAYLOAD_STRUCTURAL:
+            continue
+        text_parts.extend(_free_text_leaves(v, banned, where))
+    return _join_unique(subject_parts), _join_unique(text_parts)
+
+
 def parse_intent(raw: dict) -> GovernIntent:
     """Parse a raw dict into GovernIntent (or channel subclass). Raises IntentValidationError."""
     if not isinstance(raw, dict):
@@ -532,55 +659,82 @@ def parse_intent(raw: dict) -> GovernIntent:
     try:
         if model_cls is MailScanIntent:
             _reject_forbidden_scan_keys(raw, MAIL_SCAN_FORBIDDEN, where="mail")
-            # Prefer payload subject/text; allow top-level subject/body aliases.
-            if "payload" not in raw and ("subject" in raw or "body" in raw):
-                return MailScanIntent.from_scan(
-                    subject=str(raw.get("subject", "")),
-                    body=str(raw.get("body", "")),
-                    **{
-                        k: v
-                        for k, v in raw.items()
-                        if k not in ("subject", "body", "action", "payload")
-                    },
+            _reject_secret_keys(raw, where="mail")
+            # Every content-bearing field (payload.subject/text, top-level
+            # subject/body aliases, and any other free-text payload key such as
+            # payload.body) is folded into the scanned subject + body.
+            if _has_prose_fields(raw, _MAIL_SUBJECT_ALIASES + _MAIL_TEXT_ALIASES):
+                subject, body = _fold_prose_scan_fields(
+                    raw,
+                    where="mail",
+                    forbidden=MAIL_SCAN_FORBIDDEN,
+                    subject_aliases=_MAIL_SUBJECT_ALIASES,
+                    text_aliases=_MAIL_TEXT_ALIASES,
                 )
-            return MailScanIntent.model_validate(raw)
-        if model_cls is CalendarScanIntent:
-            _reject_forbidden_scan_keys(raw, CALENDAR_SCAN_FORBIDDEN, where="calendar")
-            if "summary" in raw and "payload" not in raw:
-                return CalendarScanIntent.from_scan(
-                    summary=str(raw.get("summary", "")),
-                    description=str(raw.get("description", "")),
-                    location=str(raw.get("location", "")),
+                return MailScanIntent.from_scan(
+                    subject=subject,
+                    body=body,
                     **{
                         k: v
                         for k, v in raw.items()
                         if k
                         not in (
-                            "summary",
-                            "description",
-                            "location",
-                            "action",
-                            "payload",
+                            _MAIL_SUBJECT_ALIASES + _MAIL_TEXT_ALIASES + ("action", "payload")
+                        )
+                    },
+                )
+            return MailScanIntent.model_validate(raw)
+        if model_cls is CalendarScanIntent:
+            _reject_forbidden_scan_keys(raw, CALENDAR_SCAN_FORBIDDEN, where="calendar")
+            _reject_secret_keys(raw, where="calendar")
+            if _has_prose_fields(raw, _CAL_SUBJECT_ALIASES + _CAL_TEXT_ALIASES + ("location",)):
+                summary, description = _fold_prose_scan_fields(
+                    raw,
+                    where="calendar",
+                    forbidden=CALENDAR_SCAN_FORBIDDEN,
+                    subject_aliases=_CAL_SUBJECT_ALIASES,
+                    text_aliases=_CAL_TEXT_ALIASES,
+                )
+                return CalendarScanIntent.from_scan(
+                    summary=summary,
+                    description=description,
+                    location=_join_unique(_alias_text(raw.get("location"), frozenset(), "calendar"))
+                    if raw.get("location") is not None
+                    else "",
+                    **{
+                        k: v
+                        for k, v in raw.items()
+                        if k
+                        not in (
+                            _CAL_SUBJECT_ALIASES
+                            + _CAL_TEXT_ALIASES
+                            + ("location", "action", "payload")
                         )
                     },
                 )
             return CalendarScanIntent.model_validate(raw)
         if model_cls is SocialScanIntent:
             _reject_forbidden_scan_keys(raw, SOCIAL_SCAN_FORBIDDEN, where="social")
-            if ("text" in raw or "platform" in raw) and "payload" not in raw:
+            _reject_secret_keys(raw, where="social")
+            if _has_prose_fields(raw, _SOCIAL_SUBJECT_ALIASES + _SOCIAL_TEXT_ALIASES):
+                platform, text = _fold_prose_scan_fields(
+                    raw,
+                    where="social",
+                    forbidden=SOCIAL_SCAN_FORBIDDEN,
+                    subject_aliases=_SOCIAL_SUBJECT_ALIASES,
+                    text_aliases=_SOCIAL_TEXT_ALIASES,
+                )
                 return SocialScanIntent.from_scan(
-                    text=str(raw.get("text", raw.get("body", ""))),
-                    platform=str(raw.get("platform", "")),
+                    text=text,
+                    platform=platform,
                     **{
                         k: v
                         for k, v in raw.items()
                         if k
                         not in (
-                            "text",
-                            "body",
-                            "platform",
-                            "action",
-                            "payload",
+                            _SOCIAL_SUBJECT_ALIASES
+                            + _SOCIAL_TEXT_ALIASES
+                            + ("action", "payload")
                         )
                     },
                 )
