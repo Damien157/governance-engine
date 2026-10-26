@@ -8,13 +8,37 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## test/all-works — one-command runner + default tool-gate hardening (**Reported**, PR open)
+
+| Field | Value |
+|-------|--------|
+| Branch | `test/all-works` (rebased on `main` @ `a804a7e`, PR #25) |
+| Runner | `scripts/run_all_works_tests.py`: auto-discovers `tests/test_*.py` (pytest, per-area summary); sub-project folders kept; `coverage_problems()` fails on any test file matching no area (satisfies `tests/test_runner_coverage.py`, unchanged) |
+| Policy | `certified_governance_unified.py` default `PolicySpec`: destructive/irreversible + CBRN rules (below); `PolicyRule.exclude_actions`; `action_rules` now honour `pattern` |
+| Contracts | `contracts.parse_intent`: `run_algorithm` scan fields under `payload` are folded in instead of silently dropped |
+| Label | **Reported** until Damien reviews and merges |
+
+### What changed
+
+- **Destructive actions.** BLOCK: `rm -rf` on root/home/system paths or `--no-preserve-root`, `DROP DATABASE/SCHEMA`, format/mkfs/`dd of=/dev/sd*`/fork bomb, wipe/erase/destroy production data, wipe/erase the database/disk/server/backups; action names `drop_database`, `wipe_disk|database|production|all|everything…`, `format_disk|drive…`, `delete_everything`, `delete_production…`. REVIEW: other `rm -rf`, `DROP/TRUNCATE TABLE`, "delete all/every", action names `delete_all*`, `truncate_table`, `wipe_*`, `bulk_delete*`. Reasons `banned_term:destructive*` / `policy:destructive_action:*` map to `GOV_POLICY_BLOCK` / `GOV_POLICY_REVIEW`.
+- **CBRN.** BLOCK: synthesis/acquisition/weaponisation verbs near named agents (nerve agents, sarin, VX, ricin, anthrax, ...), "build/make" of weapons/devices, enrich uranium for a weapon. REVIEW: a bare agent mention (not on mail/calendar/social/bio channels).
+- **Scoping.** Destructive content rules skip `send_email`, `calendar_write`, `publish_post` (prose, not an executable tool call). CBRN BLOCK applies everywhere; bare-mention REVIEW skips prose and `bio_govern`.
+- **Silent drop fixed.** `{"action": "run_algorithm", "payload": {"purpose": ...}}` reached policy with an empty payload, so nothing was scanned.
+
+### Accepted residuals
+
+- Regex markers: paraphrase, obfuscation and non-English requests are not caught; this is a floor, not a classifier.
+- Mail/calendar/social intents passed through `GovernedTool` with non-contract payload keys (e.g. `payload.body`) still lose those keys before policy; use the channel adapters (`from_scan` forms).
+
+---
+
 ## fix/bio-ci-kernel-snapshot — kernel score snapshot + bio tests in CI (**Reported**, PR open)
 
 | Field | Value |
 |-------|--------|
 | Branch | `fix/bio-ci-kernel-snapshot` (off `main` @ `495b294`) |
 | Kernel | `src/governed_stack/bio_semantic_overlay.py`: no longer byte-for-byte (was sha256 `aab42764…9c89`). Only change: `snapshot_scores` + `_score` merges from the snapshot |
-| CI | `scripts/run_all_works_tests.py` (the `ci.yml` suite step) now also runs pytest over the 11 `tests/` files its unittest list never ran; `ci.yml` itself unchanged |
+| CI | `scripts/run_all_works_tests.py` (the `ci.yml` suite step) now also runs pytest over the 11 `tests/` files its unittest list never ran; `ci.yml` itself unchanged (historical: the runner was later rewritten to auto-discover tests, see [TESTING.md](../TESTING.md)) |
 | Label | **Reported** until Damien reviews and merges |
 
 ### What changed
@@ -28,7 +52,7 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 - GitHub Actions still blocked remotely by the account billing lock; green is local only.
 - `ruff` / `mypy` are unpinned in the dev extras.
 - `decide()` is still a pure function over an already-validated mapping; external callers that validate and then call `decide` on a live mapping must snapshot first (use `snapshot_scores`).
-- `hais/hais_tests`, `haven2/tests`, `imprint/tests` are not in CI (out of scope; `hais/hais_tests/test_zk_proofs.py` has a broken import).
+- `hais/hais_tests`, `haven2/tests`, `imprint/tests` are not in CI (out of scope; `hais/hais_tests/test_zk_proofs.py` has a broken import). **Superseded:** #25 fixed the import and the runner now runs all three folders (`EXTRA_PYTEST_DIRS`).
 
 ---
 

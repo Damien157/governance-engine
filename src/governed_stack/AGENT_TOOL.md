@@ -15,7 +15,8 @@ Hard gate. Do not bypass.
 5. Do not close over a different intent in the side_effect — factories take the
    connector only; sha mismatch refuses the call.
 6. Sidecar stays **check-only** — no remote `/v1/execute` for arbitrary tools.
-7. Name + job: every agent declares what tools it may run alone vs escalate
+7. Default policy BLOCKs plainly-worded destructive/irreversible actions (rm -rf on system paths, DROP DATABASE, format disk, wipe production, `delete_all*` is REVIEW) and CBRN synthesis requests; regex floor only, not a semantic classifier (see `docs/AUDIT_TRAIL.md`).
+8. Name + job: every agent declares what tools it may run alone vs escalate
    (see `docs/AGENT_MANDATES.md`).
 
 Accepted residual: AST lint cannot prove every external agent host is wired;

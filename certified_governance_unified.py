@@ -1143,6 +1143,11 @@ class PolicyRule:
     term: Optional[str] = None
     action: str = "BLOCK"
     reason: str = ""
+    # Optional scoping: regexes (case-insensitive, full match against the intent
+    # ``action``) naming intents this rule does NOT apply to. Lets content rules
+    # target tool/agent calls without firing on prose channels (mail/calendar/
+    # social), where e.g. "rm -rf" is just text. Default None = applies everywhere.
+    exclude_actions: Optional[List[str]] = None
 
 @dataclass
 class PolicySpec:
@@ -1226,9 +1231,25 @@ class PolicySpec:
                 reason = entry.get("reason") or rule_id
                 rule_type = entry.get("type", cls._SECTION_TYPES.get(section_name, section_name))
 
+                exclude_actions = entry.get("exclude_actions")
+                if exclude_actions is not None:
+                    if not isinstance(exclude_actions, list) or not all(
+                        isinstance(x, str) for x in exclude_actions
+                    ):
+                        raise ValueError(
+                            f"rule '{rule_id}': 'exclude_actions' must be a list of regex strings"
+                        )
+                    for x in exclude_actions:
+                        try:
+                            re.compile(x)
+                        except re.error as e:
+                            raise ValueError(
+                                f"rule '{rule_id}' has an invalid exclude_actions regex: {e}"
+                            )
+
                 rules.append(PolicyRule(
                     id=rule_id, type=rule_type, pattern=pattern, term=term,
-                    action=action, reason=reason,
+                    action=action, reason=reason, exclude_actions=exclude_actions,
                 ))
             return rules
 
@@ -1269,6 +1290,132 @@ class PolicySpec:
             )
 
         return cls.from_dict(data)
+
+# ----------------------------------------------------------------------------
+# Default tool-safety rules (destructive / irreversible actions, CBRN weapons)
+# ----------------------------------------------------------------------------
+# Same PolicyRule/PolicySpec mechanism as PII/banned terms: matches become
+# policy reasons, BLOCK/REVIEW flows through _decide() into the signed audit
+# row, and map_error_code() maps ``banned_term:*`` / ``policy:*`` to
+# GOV_POLICY_BLOCK and any REVIEW to GOV_POLICY_REVIEW. Operators can override
+# the whole spec via policy_spec_path.
+#
+# Honesty: regex markers over the intent JSON. They catch plainly-worded
+# requests, not paraphrase / obfuscation / semantic dodges; they are a floor,
+# not a classifier. Content rules skip the prose channels (mail / calendar /
+# social), where a command or topic is text, not an executable tool call.
+
+# Intent actions of the prose channels (see governed_stack.contracts).
+_PROSE_CHANNEL_ACTIONS = [r"send_email", r"calendar_write", r"publish_post"]
+# Bare agent mentions (REVIEW) also skip the bio channel, which has its own judge.
+_PROSE_AND_BIO_ACTIONS = _PROSE_CHANNEL_ACTIONS + [r"bio_govern"]
+
+_CBRN_AGENTS = (
+    r"(?:nerve\s+agents?|sarin|soman|tabun|cyclosarin|novichok|vx(?:\s+(?:nerve\s+)?(?:gas|agent))?"
+    r"|mustard\s+(?:gas|agent)|sulfur\s+mustard|ricin|anthrax|bacillus\s+anthracis"
+    r"|botulinum\s+toxin|smallpox|variola|bio-?weapons?|chemical\s+weapons?|biological\s+weapons?)"
+)
+_CBRN_DEVICES = (
+    r"(?:nuclear\s+(?:weapons?|bombs?|devices?)|dirty\s+bombs?|pipe\s+bombs?"
+    r"|radiological\s+dispersal\s+devices?|improvised\s+explosive\s+devices?)"
+)
+_CBRN_STRONG_VERBS = (
+    r"(?:synthesi[sz]\w*|manufactur\w*|weaponi[sz]\w*|cultivat\w*|aerosoli[sz]\w*|stockpil\w*"
+    r"|acquir\w*|obtain\w*|purchas\w*|buy\w*|smuggl\w*|disperse\w*|enrich\w*)"
+)
+_CBRN_BUILD_VERBS = r"(?:make|making|build|building|construct\w*|assembl\w*|brew\w*|create|creating)"
+_RM_FLAGS = r"(?:-{1,2}[a-z][a-z-]*\s+)*"
+_RM_RF = r"-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*"
+_RM_ROOT_TARGET = (
+    r"(?:--no-preserve-root\s+)?(?:/\*?|~/?\*?|\*|\$\{?home\}?/?\*?"
+    r"|/(?:etc|usr|var|home|boot|bin|sbin|lib\w*|opt|root|srv|dev|sys|proc|mnt|data)\b\S*)"
+    r"(?=\s|$|[\\\x22';&|)])"
+)
+
+
+def _normalize_action_name(name: str) -> str:
+    """camelCase / kebab-case / spaced action names -> lower snake_case."""
+    n = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name.strip())
+    return re.sub(r"[\s\-.]+", "_", n).lower()
+
+
+def _rule_excluded(rule: "PolicyRule", action_name: str) -> bool:
+    if not rule.exclude_actions:
+        return False
+    return any(re.fullmatch(p, action_name, re.IGNORECASE) for p in rule.exclude_actions)
+
+
+def _tool_safety_banned_terms() -> List["PolicyRule"]:
+    prose = list(_PROSE_CHANNEL_ACTIONS)
+    prose_bio = list(_PROSE_AND_BIO_ACTIONS)
+
+    def r(rid: str, pattern: str, action: str, reason: str, exclude=None) -> "PolicyRule":
+        return PolicyRule(id=rid, type="banned", pattern=pattern, action=action,
+                          reason=reason, exclude_actions=exclude)
+
+    return [
+        # ---- destructive / irreversible: BLOCK --------------------------------
+        r("tool_rm_rf_root", rf"\brm\s+{_RM_FLAGS}{_RM_RF}\s+{_RM_ROOT_TARGET}"
+          r"|--no-preserve-root", "BLOCK", "banned_term:destructive:rm_rf_root", prose),
+        r("tool_drop_database", r"\bdrop\s+(?:database|schema)\b", "BLOCK",
+          "banned_term:destructive:drop_database", prose),
+        r("tool_format_disk",
+          r"\bformat\s+(?:(?:the|my|your|this|entire|whole|all|primary|main|system|hard)\s+)*"
+          r"(?:disks?|drives?|volumes?|partitions?)\b(?!\s+(?:usage|space|quota|report|output|metrics|utili[sz]ation|size))"
+          r"|\bmkfs(?:\.\w+)?\s+/dev/|\bdd\s+if=\S+\s+of=/dev/(?:sd|nvme|hd|disk|mmcblk)"
+          r"|>\s*/dev/(?:sd|nvme|hd)\w+|\bshred\s+(?:-\w+\s+)*/dev/|\bdiskutil\s+erase(?:disk|volume)"
+          r"|:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", "BLOCK",
+          "banned_term:destructive:format_disk", prose),
+        r("tool_wipe_production",
+          r"\b(?:wipe|erase|destroy|nuke|obliterate|purge|delete)\b(?:\s+\w+){0,3}?\s+(?:production|prod)\s+"
+          r"(?:database|databases|db|data|server|servers|cluster|environment|bucket|volume|backups?)\b",
+          "BLOCK", "banned_term:destructive:wipe_production", prose),
+        r("tool_wipe_everything",
+          r"\b(?:wipe|erase|destroy|nuke|obliterate)\s+(?:(?:the|all|every|entire|whole|our|your|my)\s+)*"
+          r"(?:databases?|disks?|drives?|filesystem|file\s+system|servers?|backups?|hard\s*drives?)\b",
+          "BLOCK", "banned_term:destructive:wipe_everything", prose),
+        # ---- destructive but ambiguous: REVIEW --------------------------------
+        r("tool_rm_rf_other", rf"\brm\s+{_RM_FLAGS}{_RM_RF}\b", "REVIEW",
+          "banned_term:destructive_review:rm_rf", prose),
+        r("tool_drop_truncate_table", r"\b(?:drop|truncate)\s+table\b", "REVIEW",
+          "banned_term:destructive_review:drop_table", prose),
+        r("tool_delete_all", r"\bdelete\s+(?:all|every|everything)\b", "REVIEW",
+          "banned_term:destructive_review:delete_all", prose),
+        # ---- weapons / CBRN synthesis: BLOCK ----------------------------------
+        r("cbrn_synthesis",
+          rf"\b{_CBRN_STRONG_VERBS}\b.{{0,60}}?\b{_CBRN_AGENTS}\b"
+          rf"|\b{_CBRN_AGENTS}\b.{{0,40}}?\b(?:synthesis|synthetic\s+route|production\s+(?:route|method|process)"
+          r"|manufacture|recipe|precursors?)\b",
+          "BLOCK", "banned_term:cbrn:synthesis"),
+        r("cbrn_build",
+          rf"\b{_CBRN_BUILD_VERBS}\s+(?:(?:a|an|some|your\s+own|homemade|improvised)\s+)*"
+          rf"(?:{_CBRN_AGENTS}|{_CBRN_DEVICES})\b"
+          r"|\benrich\w*\s+uranium\s+(?:for|into)\s+(?:a\s+)?(?:weapons?|bombs?)\b",
+          "BLOCK", "banned_term:cbrn:build"),
+        # ---- bare agent mention, no verb: ambiguous (news/safety/education) ---
+        r("cbrn_mention", rf"\b{_CBRN_AGENTS}\b", "REVIEW",
+          "banned_term:cbrn_review:agent_mention", prose_bio),
+    ]
+
+
+def _tool_safety_action_rules() -> List["PolicyRule"]:
+    def a(rid: str, pattern: str, action: str, reason: str) -> "PolicyRule":
+        return PolicyRule(id=rid, type="action", pattern=pattern, action=action, reason=reason)
+
+    return [
+        a("action_destructive_block",
+          r"^(?:(?:wipe|format|nuke|shred|obliterate)_(?:disk|drive|volume|partition|database|db|production|prod"
+          r"|all|everything|server|filesystem)\w*"
+          r"|drop_(?:database|db|schema)\w*|rm_rf\w*"
+          r"|(?:delete|destroy|erase|purge)_(?:production|prod)\w*"
+          r"|(?:delete|erase|destroy|purge|remove)_everything\w*)$",
+          "BLOCK", "policy:destructive_action:block"),
+        a("action_destructive_review",
+          r"^(?:(?:delete|remove|erase|purge|destroy|truncate)_all\w*|(?:drop|truncate)_table\w*"
+          r"|(?:wipe|nuke)_\w+|bulk_delete\w*)$",
+          "REVIEW", "policy:destructive_action:review"),
+    ]
+
 
 class PolicyEngine:
     """
@@ -1375,8 +1522,8 @@ class PolicyEngine:
                     action="BLOCK",
                     reason="banned_term:ssn",
                 ),
-            ],
-            action_rules=[],
+            ] + _tool_safety_banned_terms(),
+            action_rules=_tool_safety_action_rules(),
         )
 
     def evaluate(self, intent: Dict[str, Any]) -> Dict[str, Any]:
@@ -1398,18 +1545,30 @@ class PolicyEngine:
             spec = self.spec
             compiled_patterns = self._compiled_patterns
 
+        action_name = intent.get("action", "")
+        if not isinstance(action_name, str):
+            action_name = ""
+
         for rule in spec.pii_rules + spec.banned_terms:
+            if _rule_excluded(rule, action_name):
+                continue
             pat = compiled_patterns.get(rule.id)
             if pat and pat.search(text):
                 reasons.append(rule.reason)
                 actions.append(rule.action)
 
-        # Action-level rules (optional)
-        action_name = intent.get("action", "")
+        # Action-level rules (optional): exact ``term`` or regex ``pattern``
+        # matched against the action name (normalised: snake_case, lower).
+        norm_action = _normalize_action_name(action_name)
         for rule in spec.action_rules:
             if rule.term and rule.term.lower() == action_name.lower():
                 reasons.append(rule.reason)
                 actions.append(rule.action)
+            elif rule.pattern:
+                pat = compiled_patterns.get(rule.id)
+                if pat and pat.search(norm_action):
+                    reasons.append(rule.reason)
+                    actions.append(rule.action)
 
         if any(a == "BLOCK" for a in actions):
             decision_hint = "BLOCK"
