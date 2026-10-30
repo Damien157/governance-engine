@@ -443,10 +443,9 @@ class GovernedStack:
             "in_L": key in L_labels,
         }
 
-    # QP statuses that count as a usable control step (see qp_controller):
-    # "optimal" and the feasible CBF-only fallback "cbf_only_after:<prior>".
+    # Only "optimal" counts as a usable control step; every other status
+    # (incl. the CBF-only fallback "cbf_only_after:<prior>") BLOCKs.
     QP_OK_STATUS = "optimal"
-    QP_OK_PREFIXES = ("cbf_only_after:",)
 
     @classmethod
     def _qp_block_reasons(cls, solver: Optional[Dict[str, Any]]) -> list:
@@ -460,7 +459,7 @@ class GovernedStack:
             out.append("qp:infeasible")
         status = solver.get("status")
         st = str(status) if status is not None else "none"
-        if not (st == cls.QP_OK_STATUS or st.startswith(cls.QP_OK_PREFIXES)):
+        if st != cls.QP_OK_STATUS:
             out.append(f"qp:status:{st}")
         return out
 

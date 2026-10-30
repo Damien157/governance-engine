@@ -115,17 +115,20 @@ class TestQPGovernanceBlock(unittest.IsolatedAsyncioTestCase):
 
     def test_helper_never_loosens(self):
         self.assertEqual(GovernedStack._qp_block_reasons({"kind": "control", **_ok()}), [])
-        self.assertEqual(GovernedStack._qp_block_reasons({"kind": "control", **_ok("cbf_only_after:x")}), [])
+        self.assertEqual(GovernedStack._qp_block_reasons({"kind": "control", **_ok("cbf_only_after:x")}),
+                         ["qp:status:cbf_only_after:x"])
         self.assertEqual(GovernedStack._qp_block_reasons(None), [])
 
     # 3. ok step leaves ALLOW
     async def test_ok_step_allows(self):
-        for st in ("optimal", "cbf_only_after:unknown"):
-            s = self.make_stack()
-            self.force_ops(s, "ALLOW")
-            env, _ = await self.run_ctrl(s, _FakeQP(_ok(st)))
-            self.assertEqual(env["decision"], "ALLOW", st)
-            self.assertFalse(any(r.startswith("qp:") for r in env["reasons"]))
+        s = self.make_stack()
+        self.force_ops(s, "ALLOW")
+        env, _ = await self.run_ctrl(s, _FakeQP(_ok("optimal")))
+        self.assertEqual(env["decision"], "ALLOW")
+        self.assertFalse(any(r.startswith("qp:") for r in env["reasons"]))
+
+    async def test_cbf_only_fallback_blocks(self):
+        await self._assert_block(_FakeQP(_ok("cbf_only_after:unknown")), "qp:status:cbf_only_after:unknown")
 
     # Voucher: passed through to ops (which ALLOWs), QP check still BLOCKs afterwards.
     async def test_voucher_cannot_reopen(self):

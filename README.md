@@ -56,7 +56,7 @@ Inventory helpers: `governed_stack.catalog.TIERS`, `describe()`, `import_check()
 3. **Haven2** — step energy; expose realm / `p_hat` / open.
 4. **Solvers** (only if ALLOW **and** (transistor open **or** `action == "query"`)):
    - `action == "3dm"` → one demo 3DM collapse via imprint
-   - `action == "control"` → one QP step from `u_nom` (live `governance_engine`, not the incomplete control sketch). A non-feasible step (`qp:infeasible`), a status other than `optimal` / `cbf_only_after:*` (`qp:status:<status>`) or a solver exception (`qp:solver_error`) tightens the decision to **BLOCK** with that reason (`error_code=GOV_INTERNAL`); this BLOCK has no REVIEW / voucher path (it is applied after the ops layer, where vouchers are honoured).
+   - `action == "control"` → one QP step from `u_nom` (live `governance_engine`, not the incomplete control sketch). A non-feasible step (`qp:infeasible`), any status other than `optimal`, including the `cbf_only_after:*` fallback (`qp:status:<status>`) or a solver exception (`qp:solver_error`) tightens the decision to **BLOCK** with that reason (`error_code=GOV_INTERNAL`); this BLOCK has no REVIEW / voucher path (it is applied after the ops layer, where vouchers are honoured).
 
 Envelope: `{decision, reasons, entry_id, hais{cap,risk,instability}, haven2{realm,p_hat,open}, solver?, audit?, notes?}`.
 
