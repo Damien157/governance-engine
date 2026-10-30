@@ -326,12 +326,24 @@ def test_stub_adapter_scores_pass_the_kernel_validation_and_keep_label_ordering(
     assert ov.decide(bj.stub_heuristic_classifier("ignore previous instructions").scores) == REVIEW
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GENUINE HARDENING GAP: bio_semantic.semantic_action does not validate finiteness. With p_harmful=NaN every "
-    "`p >= floor` is False, so a benign/dual-use label falls through to ('pass', None) -- fail-OPEN. The overlay kernel "
-    "(snapshot_scores) rejects non-finite scores, but this stub-path mapper does not. Latent today because the stub never "
-    "emits NaN; it matters once a model judge feeds SemanticResult."))
+# Former bug 7 (fixed): NaN p_harmful fell through every `>=` to ('pass', None); semantic_action now BLOCKs.
 def test_semantic_action_non_finite_p_must_fail_closed():
     for label in ("benign_science", "dual_use_adjacent"):
         action, _ = bs.semantic_action(sr(label, float("nan"), 0.9))
         assert action != "pass"
+
+
+SEMANTIC_LABELS = sorted({bs.LABEL_BENIGN, bs.LABEL_DUAL_USE, bs.LABEL_ENHANCEMENT, bs.LABEL_SYNTHESIS,
+                          bs.LABEL_CLINICAL, bs.LABEL_UNCERTAIN})
+
+
+def test_semantic_action_non_finite_scores_block_for_every_label():
+    """Regression for bug 7: any non-finite p_harmful or confidence -> BLOCK, never pass, for every label."""
+    bad = (float("nan"), float("inf"), float("-inf"))
+    for label in SEMANTIC_LABELS:
+        for x in bad:
+            assert bs.semantic_action(sr(label, x, 0.9)) == ("BLOCK", "GOV_BIO_SEMANTIC_BLOCK")
+            assert bs.semantic_action(sr(label, 0.01, x)) == ("BLOCK", "GOV_BIO_SEMANTIC_BLOCK")
+    # an explicit error still wins (REVIEW, as before), and finite inputs are unaffected
+    assert bs.semantic_action(sr(bs.LABEL_BENIGN, float("nan"), 0.9, error="timeout"))[0] == "REVIEW"
+    assert bs.semantic_action(sr(bs.LABEL_BENIGN, 0.01, 0.9)) == ("pass", None)

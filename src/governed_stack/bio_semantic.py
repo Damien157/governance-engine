@@ -19,6 +19,7 @@ tests/test_bio_semantic_judge.py::test_i6_no_live_module_bypasses_judge_pipeline
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -253,6 +254,9 @@ def semantic_action(semantic: SemanticResult) -> Tuple[str, Optional[str]]:
     label = semantic.label
     p = float(semantic.p_harmful)
     conf = float(semantic.confidence)
+    if not (math.isfinite(p) and math.isfinite(conf)):
+        # Fail closed: NaN makes every `>=` below False and would fall through to "pass".
+        return "BLOCK", "GOV_BIO_SEMANTIC_BLOCK"
 
     if label in _BLOCK_LABELS and conf >= SEMANTIC_LABEL_BLOCK_CONF:
         return "BLOCK", "GOV_BIO_SEMANTIC_BLOCK"
