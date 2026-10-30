@@ -354,6 +354,7 @@ class GovernedStack:
             solver_ok = False
 
         solver: Optional[Dict[str, Any]] = None
+        qp_tightened: Optional[Dict[str, str]] = None
 
         # ---- d) imprint 3DM (demo catalog instance) ------------------------
         if solver_ok and action == "3dm":
@@ -370,6 +371,26 @@ class GovernedStack:
             except Exception as exc:
                 notes.append(f"qp_solver_error:{exc}")
                 solver = {"kind": "control", "error": str(exc)}
+            # Feed the controller's safety signal back into governance
+            # (tighten-only: ALLOW/REVIEW -> BLOCK; never loosened, and it runs after
+            # the ops layer so an approval voucher cannot reopen it). The ops
+            # layer (CGE) has already written its audit entry with the
+            # pre-solver decision; like the HAIS cap override above, this
+            # tightening is recorded in the envelope (reasons/notes/
+            # audit.qp_tightened), not as a second audit write.
+            qp_reason = self._qp_failure_reason(solver)
+            if qp_reason is not None:
+                if qp_reason not in reasons:
+                    reasons.append(qp_reason)
+                tightened = self._tighten(decision, "BLOCK")
+                if tightened != decision:
+                    notes.append(
+                        f"{qp_reason}: stack tightens {decision} -> {tightened} "
+                        "after control step; CGE audit entry holds the pre-solver "
+                        "decision (no second audit write)"
+                    )
+                    qp_tightened = {"from": decision, "to": tightened, "reason": qp_reason}
+                decision = tightened
 
         code = map_error_code(decision=decision, reasons=reasons, notes=notes)
         return self._envelope(
@@ -392,6 +413,7 @@ class GovernedStack:
                 "logged": result.get("logged"),
                 "risk_signal": risk_signal,
                 "attestations": ops.get("attestations"),
+                **({"qp_tightened": qp_tightened} if qp_tightened else {}),
             },
             notes=notes or None,
             error_code=code,
@@ -448,7 +470,39 @@ class GovernedStack:
             "u_nom": u_nom,
             "status": sol.get("status"),
             "feasible": bool(sol.get("feasible")),
+            "fail_closed": bool(sol.get("fail_closed", False)),
         }
+
+    _DECISION_RANK = {"ALLOW": 0, "REVIEW": 1, "BLOCK": 2}
+    _QP_OK_STATUSES = frozenset({"optimal"})
+
+    @classmethod
+    def _tighten(cls, current: str, floor: str) -> str:
+        """Return the stricter of two decisions (ALLOW < REVIEW < BLOCK).
+
+        Unknown labels rank as BLOCK so tightening never loosens.
+        """
+        rank = cls._DECISION_RANK
+        cur = (current or "BLOCK").upper()
+        if rank.get(cur, 2) >= rank.get(floor, 2):
+            return cur if cur in rank else "BLOCK"
+        return floor
+
+    @classmethod
+    def _qp_failure_reason(cls, solver: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Reason string if a control-step solver result is not a healthy solve."""
+        if not solver or solver.get("kind") != "control":
+            return None
+        if "error" in solver:
+            return "qp_solver_error"
+        status = str(solver.get("status"))
+        if (
+            solver.get("feasible") is not True
+            or solver.get("fail_closed")
+            or status not in cls._QP_OK_STATUSES
+        ):
+            return f"qp_not_feasible:{status}"
+        return None
 
     # ------------------------------------------------------------------
     # Envelope helpers
