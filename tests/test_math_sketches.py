@@ -209,11 +209,7 @@ def _reach(g, s, t):
     return False
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GENUINE BUG (diagnostics/invariant_topology.py::find_cycles_in_invariants): the DFS marks nodes `visited` and never "
-    "revisits them, so a cycle whose closing edge leaves an already-finished node is never reported and "
-    "detect_circular_invariants under-reports circular invariants. Minimal repro: edges a->b, a->c, b->a, c->b "
-    "(a->c->b->a is a cycle through c) returns only {a, b}."))
+# Former bug 6 (fixed): the single-pass DFS never re-entered finished nodes and missed cycles through them.
 def test_cycle_finder_reports_every_node_that_lies_on_a_cycle_minimal_repro():
     g = {"a": ["b", "c"], "b": ["a"], "c": ["b"]}
     on_cycle = {x for x in g if _reach(g, x, x)}
@@ -222,7 +218,6 @@ def test_cycle_finder_reports_every_node_that_lies_on_a_cycle_minimal_repro():
     assert reported == on_cycle
 
 
-@pytest.mark.xfail(strict=True, reason="Same defect as above, measured: ~2.5% of seeded random digraphs (75/3000) lose at least one on-cycle node.")
 def test_cycle_finder_matches_reachability_oracle_on_random_digraphs():
     bad = 0
     for seed in range(3000):
@@ -234,6 +229,22 @@ def test_cycle_finder_matches_reachability_oracle_on_random_digraphs():
         got = {x for c in it.find_cycles_in_invariants(g) for x in c}
         bad += got != truth
     assert bad == 0
+
+
+def test_cycle_finder_enumerates_each_simple_cycle_exactly_once():
+    """Regression for bug 6: full simple-cycle enumeration, canonical rotation, no duplicates."""
+    g = {"a": ["b", "c"], "b": ["a"], "c": ["b"]}
+    assert sorted(it.find_cycles_in_invariants(g)) == [["a", "b"], ["a", "c", "b"]]
+    assert it.find_cycles_in_invariants({"x": ["x", "x"]}) == [["x"]]
+    # complete digraph on 4 nodes: sum_{k=2..4} C(4,k)(k-1)! = 6 + 8 + 6 = 20 simple cycles
+    k4 = {u: [v for v in "abcd" if v != u] for u in "abcd"}
+    cyc = it.find_cycles_in_invariants(k4)
+    assert len(cyc) == 20 == len({tuple(c) for c in cyc})
+    assert all(c[0] == min(c) and len(set(c)) == len(c) for c in cyc)
+    for c in cyc:  # every reported cycle is a real closed walk
+        assert all(c[(i + 1) % len(c)] in k4[c[i]] for i in range(len(c)))
+    inv = [it.Invariant("I0", ["I2"]), it.Invariant("I1", ["I0"]), it.Invariant("I2", ["I1", "I0"])]
+    assert it.detect_circular_invariants(inv) == ["I0", "I1", "I2"]
 
 
 # ====================================================================================== Taylor-Green / control law

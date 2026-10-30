@@ -76,40 +76,45 @@ def build_invariant_graph(invariants: Iterable[Invariant]) -> Dict[str, List[str
 
 
 def find_cycles_in_invariants(graph: Dict[str, List[str]]) -> List[List[str]]:
-    """Return unique simple directed cycles in the invariant dependency graph."""
-    visited: Set[str] = set()
-    stack: Set[str] = set()
+    """Return every unique simple directed cycle in the invariant dependency graph.
+
+    Each cycle is reported once, as its node list rotated to start at its smallest node
+    (e.g. ``["a", "b", "c"]`` for a->b->c->a); self-loops are ``[n]``.
+
+    Earlier versions ran a single DFS with a global ``visited`` set and never re-entered a
+    finished node, so a cycle whose closing edge went through an already-finished node was
+    missed (a->b, a->c, b->a, c->b lost a->c->b->a). Here every cycle is enumerated from its
+    smallest node s, searching only nodes > s, so nothing is pruned that could still close a
+    cycle. Worst case is exponential in the number of cycles (as for any full enumeration);
+    invariant dependency graphs are small.
+    """
+    adj: Dict[str, List[str]] = {}
+    for u, vs in graph.items():
+        adj.setdefault(u, [])
+        for v in vs:
+            if v not in adj[u]:
+                adj[u].append(v)
+            adj.setdefault(v, [])
     cycles: List[List[str]] = []
-    seen_cycle_keys: Set[Tuple[str, ...]] = set()
 
-    def normalize(cycle: List[str]) -> Tuple[str, ...]:
-        body = cycle[:-1] if cycle and cycle[0] == cycle[-1] else cycle
-        if not body:
-            return tuple()
-        start = body.index(min(body))
-        rotated = body[start:] + body[:start]
-        return tuple(rotated)
-
-    def dfs(node: str, path: List[str]) -> None:
-        if node in stack:
-            idx = path.index(node)
-            cycle = path[idx:] + [node]
-            key = normalize(cycle)
-            if key and key not in seen_cycle_keys:
-                seen_cycle_keys.add(key)
-                cycles.append(path[idx:])
-            return
-        if node in visited:
-            return
-        visited.add(node)
-        stack.add(node)
-        for neigh in graph.get(node, []):
-            dfs(neigh, path + [neigh])
-        stack.remove(node)
-
-    for n in sorted(graph.keys()):
-        if n not in visited:
-            dfs(n, [n])
+    for s in sorted(adj):
+        path: List[str] = [s]
+        on_path: Set[str] = {s}
+        # iterative DFS: stack of (node, iterator over its successors)
+        stack = [(s, iter(adj[s]))]
+        while stack:
+            node, it_ = stack[-1]
+            nxt = next(it_, None)
+            if nxt is None:
+                stack.pop()
+                on_path.discard(path.pop())
+                continue
+            if nxt == s:
+                cycles.append(list(path))
+            elif nxt > s and nxt not in on_path:
+                path.append(nxt)
+                on_path.add(nxt)
+                stack.append((nxt, iter(adj[nxt])))
     return cycles
 
 
