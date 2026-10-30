@@ -20,7 +20,7 @@ Equations verified:
               Z_H = |Z_E| + Z_R + Z_C ;  S = (E_spec + R_spec + C_spec)/3 ;  S_avg = mean over sigma grid
               For a unit trace of length N:  Z = zeta(s) - zeta(s, N+1)   (Riemann / Hurwitz, scipy)
 
-Known defects are recorded as strict xfail (see the end of the file).
+Former defects (t_reset boundary, sweet-spot discontinuity) are fixed; their regression tests are at the end of the file.
 """
 from __future__ import annotations
 

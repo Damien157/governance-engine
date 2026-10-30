@@ -16,8 +16,8 @@ or the whole suite through the runner (the new files are listed in `PYTEST_FILES
     python scripts/run_all_works_tests.py
 
 Genuine defects are encoded as `xfail(strict=True)` with the reason and a minimal repro in the marker. If someone
-fixes one, strict-xfail turns the test red ("XPASS") so the marker gets removed. Bugs 1 and 2 (QP fail-closed) are
-fixed on this branch and their tests are now ordinary passing regression tests; bugs 3-7 are still open xfails.
+fixes one, strict-xfail turns the test red ("XPASS") so the marker gets removed. All seven defects found so far
+(bugs 1-7) are fixed; their tests are now ordinary passing regression tests and no strict xfails remain.
 
 ## Equation → test file
 
@@ -89,16 +89,16 @@ dissipation = ν⟨|ω|²⟩, spectral); `control_law` CBF/CLF/adaptive-Re maths
 (density, Φ(z), fingerprint, L² distance); unified control sketch closed-form trajectory; runtime v0.2 SafetyConfig,
 MetricsMonitor, AuditTrail, GovernanceKernel pass logic.
 
-## Genuine defects found (bugs 1-2 fixed; 3-7 strict xfail, not fixed)
+## Genuine defects found (all fixed: bugs 1-2 in PR #29, bugs 3-7 on `fix/math-bugs-3-6`)
 | # | Where | Test | Defect |
 |---|---|---|---|
 | 1 | CLFCBFQPController.solve | `test_infeasible_hocbf_returns_max_braking_instead_of_raising` | **FIXED.** Infeasible HOCBF row (`x=[0.5, 20]`): the second `solvers.qp` in `_solve_cbf_only` had no try/except, so `ValueError('domain error')` escaped and the last-resort clamp was unreachable. Fix: infeasibility is detected up front (`_barrier_infeasible`), the second QP is wrapped, and every non-optimal path goes through `_fail_closed_command` (max brake `u_min` when the row is infeasible, status `infeasible_barrier`). |
 | 2 | same | `test_solver_exception_must_not_return_unfiltered_nominal` | **FIXED.** `x=[0.9, 15]`: the first solve raised and the generic `except` returned the **raw u_nom** (+7, towards the barrier) with `error:…` (fail-open). Fix: the `except` now returns `clip(min(u_nom, b/a), u_min, u_max)` (the HOCBF-admissible input closest to u_nom, or max brake if none exists) with status `error:<exc>`, `feasible=False`, `fail_closed=True`. Non-finite solver output / NaN `u_nom` are handled the same way. |
-| 3 | Haven2 `t_reset` | `test_t_reset_boundary_residual_equals_epsilon_is_still_closed` | ⌈ln(ε/gap)/lnρ⌉ gives the smallest t with ρᵗ·gap ≤ ε, but the latch needs strict |P|<ε. `t_reset(0.25,1.0,0.0,0.5)=2` yet residual at t=2 is exactly 0.25. |
-| 4 | Haven2 `t_reset` | `test_t_reset_zero_means_latch_already_open_at_gap_equal_epsilon` | `t_reset(0.5,1.0,0.5,0.5)==0` while |P₀|=ε and the latch is closed. |
-| 5 | Haven2 `metric_energy_sweet_spot` | `test_energy_sweet_spot_is_non_increasing_in_abs_p_hat` | Score is discontinuous: inside the band it falls to 0.5 but the outside branch restarts at 1.0 (`metric(0.0499,0.05)=0.505 < metric(0.05,0.05)=1.0`). |
-| 6 | `diagnostics.find_cycles_in_invariants` | `test_cycle_finder_reports_every_node_that_lies_on_a_cycle_minimal_repro` (+ randomised twin) | DFS never revisits finished nodes → misses on-cycle nodes. Repro: edges a→b, a→c, b→a, c→b returns {a,b}, but a→c→b→a includes c. 75/3000 seeded random digraphs affected. |
-| 7 | `bio_semantic.semantic_action` | `test_semantic_action_non_finite_p_must_fail_closed` | NaN `p_harmful` falls through every `>=` comparison → `("pass", None)` (fail-open). Latent (stub never emits NaN; the overlay kernel validates finiteness). |
+| 3 | Haven2 `t_reset` | `test_t_reset_boundary_residual_equals_epsilon_is_still_closed` | **FIXED.** ⌈ln(ε/gap)/lnρ⌉ gave the smallest t with ρᵗ·gap ≤ ε, but the latch needs strict |P|<ε (`t_reset(0.25,1.0,0.0,0.5)` was 2, residual exactly 0.25). Fix: after the ceil, step while `rho**t * gap >= eps` (only moves exact-boundary cases; now 3). Regression: `test_t_reset_agrees_with_latch_on_exact_power_of_two_boundaries`. |
+| 4 | Haven2 `t_reset` | `test_t_reset_zero_means_latch_already_open_at_gap_equal_epsilon` | **FIXED.** `t_reset(0.5,1.0,0.5,0.5)` was 0 while |P₀|=ε and the latch is closed. Fix: the "already eligible" shortcut is now `gap < eps` (strict); that case returns 1. The test was rewritten to assert the corrected contract (closed at t=0, `t_reset==1`, open at t=1); the latch itself stays strict. |
+| 5 | Haven2 `metric_energy_sweet_spot` | `test_energy_sweet_spot_is_non_increasing_in_abs_p_hat` | **FIXED.** Score was discontinuous (`metric(0.0499,0.05)=0.505 < metric(0.05,0.05)=1.0`). Fix: the outside branch is `0.5·exp(-(|P|-ε)/ε)`, continuing from 0.5; in-band formula unchanged. Outside values are halved (EVTE C_t weight 0.1 ⇒ C_t drops by ≤0.05 when |P|≥ε). Regression: `test_energy_sweet_spot_is_continuous_at_band_edge_and_unchanged_inside`. |
+| 6 | `diagnostics.find_cycles_in_invariants` | `test_cycle_finder_reports_every_node_that_lies_on_a_cycle_minimal_repro` (+ randomised twin) | **FIXED.** The single DFS never revisited finished nodes, missing on-cycle nodes (a→b, a→c, b→a, c→b returned {a,b}; 75/3000 random digraphs). Fix: full simple-cycle enumeration from each cycle's smallest node, searching only larger nodes; each cycle reported once, rotated to start at its minimum. Worst case exponential (inherent to listing all cycles). Regression: `test_cycle_finder_enumerates_each_simple_cycle_exactly_once`. |
+| 7 | `bio_semantic.semantic_action` | `test_semantic_action_non_finite_p_must_fail_closed` | **FIXED.** NaN `p_harmful` fell through every `>=` → `("pass", None)` (fail-open). Fix: non-finite `p_harmful` or `confidence` → `("BLOCK", "GOV_BIO_SEMANTIC_BLOCK")` (an explicit `error` still maps to REVIEW first, as before). Regression: `test_semantic_action_non_finite_scores_block_for_every_label`. |
 
 ### QP fail-closed fix (bugs 1-2): what is and is not guaranteed
 Identity (exact for the Euler plant, `psi1 = -v + k h`, `ub = 0.1v - kv + alpha1 psi1`):

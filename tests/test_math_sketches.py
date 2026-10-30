@@ -10,8 +10,8 @@ Invariant topology (diagnostics/invariant_topology.py)
     "spectral_radius" is only the PROXY maxOutDeg / V -- tests pin the proxy and the Gershgorin bound
     rho(A) <= max out-degree, which is why it is a meaningful scale; self-loop ratio = #loops / E;
     barrier iff hint == barrier or ratio > .4 or (beta_1 > 0 and ratio > .2).
-    Cycle finder: finds cycles on simple examples; a randomised comparison with a reachability oracle exposes a
-    genuine miss (strict xfail below).
+    Cycle finder: finds cycles on simple examples; a randomised comparison with a reachability oracle (once a
+    strict xfail; the DFS missed cycles through finished nodes, now fixed) checks every on-cycle node is reported.
 Taylor-Green / control law (fluids/control_law.py; fluids/*.py need Dedalus so only the analytics are tested)
     u = (sin x cos y cos z, -cos x sin y cos z, 0):  div u = 0,  <E> = <|u|^2>/2 = 1/8,
     omega = curl u = (-cos x sin y sin z, -sin x cos y sin z, 2 sin x sin y cos z),  <enstrophy> = <|omega|^2>/2 = 3/8,
