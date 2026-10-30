@@ -78,7 +78,8 @@ def t_reset(epsilon: float, e0: float, e_star: float, rho: float) -> int:
     T_reset(ε) = ceil( ln(ε / |E_0 - E*|) / ln(ρ) )
 
     Edge cases:
-    - E_0 == E* or |E_0 - E*| <= ε → already eligible → 0
+    - E_0 == E* or |E_0 - E*| < ε → already eligible → 0 (strict, matching the
+      latch criterion |P| < ε; a gap of exactly ε is NOT yet eligible)
     - ε <= 0 → raise (threshold must be positive)
     - ρ not in (0, 1) → raise
     """
@@ -88,7 +89,7 @@ def t_reset(epsilon: float, e0: float, e_star: float, rho: float) -> int:
         raise ValueError(f"epsilon must be > 0, got {epsilon}")
 
     gap = abs(float(e0) - float(e_star))
-    if gap == 0.0 or gap <= epsilon:
+    if gap < epsilon:
         return 0
 
     # Pure homogeneous decay |E_t - E*| ≈ ρ^t |E_0 - E*| (drive at equilibrium).
@@ -96,4 +97,10 @@ def t_reset(epsilon: float, e0: float, e_star: float, rho: float) -> int:
     ratio = epsilon / gap
     # ratio in (0, 1) here
     value = math.log(ratio) / math.log(rho)
-    return int(math.ceil(value))
+    t = int(math.ceil(value))
+    # ceil gives the smallest t with ρ^t·gap <= ε. When ln(ε/gap)/ln(ρ) is an exact
+    # integer the residual at that t equals ε and the strict latch is still closed,
+    # so step past the boundary.
+    while rho**t * gap >= epsilon:
+        t += 1
+    return t

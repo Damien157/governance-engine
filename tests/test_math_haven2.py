@@ -20,7 +20,7 @@ Equations verified:
               Z_H = |Z_E| + Z_R + Z_C ;  S = (E_spec + R_spec + C_spec)/3 ;  S_avg = mean over sigma grid
               For a unit trace of length N:  Z = zeta(s) - zeta(s, N+1)   (Riemann / Hurwitz, scipy)
 
-Known defects are recorded as strict xfail (see the end of the file).
+Former defects (t_reset boundary, sweet-spot discontinuity) are fixed; their regression tests are at the end of the file.
 """
 from __future__ import annotations
 
@@ -342,7 +342,7 @@ def test_metric_energy_sweet_spot_inside_band_and_decay_outside():
     assert metric_energy_sweet_spot(0.0, eps) == 1.0
     assert metric_energy_sweet_spot(0.025, eps) == pytest.approx(0.75, abs=1e-14)  # 1 - .5 * .5
     for mag in (0.06, 0.1, 0.5):
-        assert metric_energy_sweet_spot(mag, eps) == pytest.approx(math.exp(-(mag - eps) / eps), rel=1e-13)
+        assert metric_energy_sweet_spot(mag, eps) == pytest.approx(0.5 * math.exp(-(mag - eps) / eps), rel=1e-13)
         assert metric_energy_sweet_spot(-mag, eps) == metric_energy_sweet_spot(mag, eps)  # even in P
 
 
@@ -502,17 +502,11 @@ def test_minimal_spectral_snapshot_is_length_one_dirichlet_sum():
         assert out["Z_H"] == pytest.approx(0.37 + 0.21, abs=1e-15)
 
 
-# ------------------------------------------------------------------ genuine defects (strict xfail)
+# ------------------------------------------------------------------ former defects (fixed) and regression tests
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (boundary off-by-one): t_reset is documented as 'solve rho^t * gap < eps' (strict, the latch "
-        "criterion |P| < eps) but ceil(ln(eps/gap)/ln(rho)) returns the smallest t with rho^t*gap <= eps. "
-        "t_reset(0.25, 1.0, 0.0, 0.5) = 2 yet the residual at t = 2 is exactly 0.25, so the latch is still closed."
-    ),
-)
+# Former bug 3 (fixed): ceil(...) returned the first t with rho^t*gap <= eps; t_reset now uses the strict
+# latch criterion.
 def test_t_reset_boundary_residual_equals_epsilon_is_still_closed():
     eps, e0, e_star, rho = 0.25, 1.0, 0.0, 0.5  # all exactly representable in binary
     t = t_reset(eps, e0, e_star, rho)
@@ -522,30 +516,42 @@ def test_t_reset_boundary_residual_equals_epsilon_is_still_closed():
     assert TransistorLatch(epsilon_switch=eps).is_open(es.p_hat), (t, es.p_hat)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (boundary): t_reset returns 0 when |E_0 - E*| <= eps ('already eligible'), but the latch opens only "
-        "for |P| < eps (strict). t_reset(0.5, 1.0, 0.5, 0.5) == 0 while |P_0| == eps and the latch is closed."
-    ),
-)
+# Former bug 4 (fixed): t_reset returned 0 for |E_0 - E*| == eps although the strict latch is closed there.
 def test_t_reset_zero_means_latch_already_open_at_gap_equal_epsilon():
     eps, e0, e_star, rho = 0.5, 1.0, 0.5, 0.5
-    assert t_reset(eps, e0, e_star, rho) == 0
-    assert TransistorLatch(epsilon_switch=eps).is_open(e0 - e_star)
+    latch = TransistorLatch(epsilon_switch=eps)
+    assert not latch.is_open(e0 - e_star)  # |P_0| == eps: closed (strict)
+    assert t_reset(eps, e0, e_star, rho) == 1  # so not "already eligible"
+    assert latch.is_open(rho * (e0 - e_star))
+    # just inside the band really is 0
+    assert t_reset(eps, 0.999, e_star, rho) == 0 and latch.is_open(0.999 - e_star)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (discontinuous / non-monotone score): metric_energy_sweet_spot is documented 'near 0 is best, still "
-        "score well inside the latch band, decay outside', but inside the band it falls linearly to 0.5 while "
-        "the outside branch exp(-(|P|-eps)/eps) starts at 1.0, so the score JUMPS 0.5 -> 1.0 at |P| = eps "
-        "(metric(0.0499, 0.05) = 0.505 < metric(0.05, 0.05) = 1.0). Not non-increasing in |P|."
-    ),
-)
+def test_t_reset_agrees_with_latch_on_exact_power_of_two_boundaries():
+    """Regression for bugs 3-4: whenever rho^k * gap == eps exactly, t_reset must be k + 1 (not k)."""
+    for rho in (0.5, 0.25):
+        for k in range(0, 8):
+            for gap in (1.0, 2.0, 0.75):
+                eps = gap * rho**k  # exact in binary
+                assert t_reset(eps, gap, 0.0, rho) == k + 1 == _brute_t_reset(eps, gap, 0.0, rho)
+                assert t_reset(eps, 0.0, gap, rho) == k + 1  # sign of the gap is irrelevant
+
+
+# Former bug 5 (fixed): the outside branch restarted at 1.0 (jump 0.5 -> 1.0 at |P| = eps); it now starts at 0.5.
 def test_energy_sweet_spot_is_non_increasing_in_abs_p_hat():
     eps = 0.05
     mags = np.linspace(0.0, 0.3, 601)
     vals = [metric_energy_sweet_spot(float(m), eps) for m in mags]
     assert all(vals[i] >= vals[i + 1] - 1e-12 for i in range(len(vals) - 1))
+
+
+def test_energy_sweet_spot_is_continuous_at_band_edge_and_unchanged_inside():
+    """Regression for bug 5: left and right limits at |P| = eps agree; the in-band formula is unchanged."""
+    for eps in (1e-3, 0.05, 0.3, 2.0):
+        left = metric_energy_sweet_spot(eps * (1 - 1e-12), eps)
+        assert left == pytest.approx(0.5, abs=1e-9)
+        assert metric_energy_sweet_spot(eps, eps) == 0.5
+        assert metric_energy_sweet_spot(-eps, eps) == 0.5
+        for frac in (0.0, 0.1, 0.5, 0.9):
+            assert metric_energy_sweet_spot(frac * eps, eps) == pytest.approx(1.0 - 0.5 * frac, abs=1e-15)
+        assert metric_energy_sweet_spot(3 * eps, eps) == pytest.approx(0.5 * math.exp(-2.0), rel=1e-13)
