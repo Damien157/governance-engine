@@ -342,7 +342,7 @@ def test_metric_energy_sweet_spot_inside_band_and_decay_outside():
     assert metric_energy_sweet_spot(0.0, eps) == 1.0
     assert metric_energy_sweet_spot(0.025, eps) == pytest.approx(0.75, abs=1e-14)  # 1 - .5 * .5
     for mag in (0.06, 0.1, 0.5):
-        assert metric_energy_sweet_spot(mag, eps) == pytest.approx(math.exp(-(mag - eps) / eps), rel=1e-13)
+        assert metric_energy_sweet_spot(mag, eps) == pytest.approx(0.5 * math.exp(-(mag - eps) / eps), rel=1e-13)
         assert metric_energy_sweet_spot(-mag, eps) == metric_energy_sweet_spot(mag, eps)  # even in P
 
 
@@ -537,17 +537,21 @@ def test_t_reset_agrees_with_latch_on_exact_power_of_two_boundaries():
                 assert t_reset(eps, 0.0, gap, rho) == k + 1  # sign of the gap is irrelevant
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (discontinuous / non-monotone score): metric_energy_sweet_spot is documented 'near 0 is best, still "
-        "score well inside the latch band, decay outside', but inside the band it falls linearly to 0.5 while "
-        "the outside branch exp(-(|P|-eps)/eps) starts at 1.0, so the score JUMPS 0.5 -> 1.0 at |P| = eps "
-        "(metric(0.0499, 0.05) = 0.505 < metric(0.05, 0.05) = 1.0). Not non-increasing in |P|."
-    ),
-)
+# Former bug 5 (fixed): the outside branch restarted at 1.0 (jump 0.5 -> 1.0 at |P| = eps); it now starts at 0.5.
 def test_energy_sweet_spot_is_non_increasing_in_abs_p_hat():
     eps = 0.05
     mags = np.linspace(0.0, 0.3, 601)
     vals = [metric_energy_sweet_spot(float(m), eps) for m in mags]
     assert all(vals[i] >= vals[i + 1] - 1e-12 for i in range(len(vals) - 1))
+
+
+def test_energy_sweet_spot_is_continuous_at_band_edge_and_unchanged_inside():
+    """Regression for bug 5: left and right limits at |P| = eps agree; the in-band formula is unchanged."""
+    for eps in (1e-3, 0.05, 0.3, 2.0):
+        left = metric_energy_sweet_spot(eps * (1 - 1e-12), eps)
+        assert left == pytest.approx(0.5, abs=1e-9)
+        assert metric_energy_sweet_spot(eps, eps) == 0.5
+        assert metric_energy_sweet_spot(-eps, eps) == 0.5
+        for frac in (0.0, 0.1, 0.5, 0.9):
+            assert metric_energy_sweet_spot(frac * eps, eps) == pytest.approx(1.0 - 0.5 * frac, abs=1e-15)
+        assert metric_energy_sweet_spot(3 * eps, eps) == pytest.approx(0.5 * math.exp(-2.0), rel=1e-13)

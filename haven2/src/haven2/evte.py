@@ -100,12 +100,18 @@ def metric_energy_sweet_spot(p_hat: float, epsilon_switch: float) -> float:
     """
     Energy deviation sweet spot: near 0 is best; still score well inside
     the latch band, decay outside.
+
+        |P| <  eps:  1 - 0.5 |P|/eps            (1.0 -> 0.5 across the band)
+        |P| >= eps:  0.5 exp(-(|P| - eps)/eps)  (continues from 0.5, decays to 0)
+
+    Continuous and non-increasing in |P|. (The outside branch used to restart at
+    1.0, so the score jumped 0.5 -> 1.0 at the band edge.)
     """
     mag = abs(float(p_hat))
     band = max(float(epsilon_switch), 1e-12)
     if mag < band:
         return 1.0 - 0.5 * (mag / band)
-    return clip01(np.exp(-(mag - band) / band))
+    return clip01(0.5 * np.exp(-(mag - band) / band))
 
 
 def score_c_t(
