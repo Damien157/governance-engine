@@ -502,17 +502,11 @@ def test_minimal_spectral_snapshot_is_length_one_dirichlet_sum():
         assert out["Z_H"] == pytest.approx(0.37 + 0.21, abs=1e-15)
 
 
-# ------------------------------------------------------------------ genuine defects (strict xfail)
+# ------------------------------------------------------------------ former defects (fixed) and regression tests
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (boundary off-by-one): t_reset is documented as 'solve rho^t * gap < eps' (strict, the latch "
-        "criterion |P| < eps) but ceil(ln(eps/gap)/ln(rho)) returns the smallest t with rho^t*gap <= eps. "
-        "t_reset(0.25, 1.0, 0.0, 0.5) = 2 yet the residual at t = 2 is exactly 0.25, so the latch is still closed."
-    ),
-)
+# Former bug 3 (fixed): ceil(...) returned the first t with rho^t*gap <= eps; t_reset now uses the strict
+# latch criterion.
 def test_t_reset_boundary_residual_equals_epsilon_is_still_closed():
     eps, e0, e_star, rho = 0.25, 1.0, 0.0, 0.5  # all exactly representable in binary
     t = t_reset(eps, e0, e_star, rho)
@@ -522,17 +516,25 @@ def test_t_reset_boundary_residual_equals_epsilon_is_still_closed():
     assert TransistorLatch(epsilon_switch=eps).is_open(es.p_hat), (t, es.p_hat)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (boundary): t_reset returns 0 when |E_0 - E*| <= eps ('already eligible'), but the latch opens only "
-        "for |P| < eps (strict). t_reset(0.5, 1.0, 0.5, 0.5) == 0 while |P_0| == eps and the latch is closed."
-    ),
-)
+# Former bug 4 (fixed): t_reset returned 0 for |E_0 - E*| == eps although the strict latch is closed there.
 def test_t_reset_zero_means_latch_already_open_at_gap_equal_epsilon():
     eps, e0, e_star, rho = 0.5, 1.0, 0.5, 0.5
-    assert t_reset(eps, e0, e_star, rho) == 0
-    assert TransistorLatch(epsilon_switch=eps).is_open(e0 - e_star)
+    latch = TransistorLatch(epsilon_switch=eps)
+    assert not latch.is_open(e0 - e_star)  # |P_0| == eps: closed (strict)
+    assert t_reset(eps, e0, e_star, rho) == 1  # so not "already eligible"
+    assert latch.is_open(rho * (e0 - e_star))
+    # just inside the band really is 0
+    assert t_reset(eps, 0.999, e_star, rho) == 0 and latch.is_open(0.999 - e_star)
+
+
+def test_t_reset_agrees_with_latch_on_exact_power_of_two_boundaries():
+    """Regression for bugs 3-4: whenever rho^k * gap == eps exactly, t_reset must be k + 1 (not k)."""
+    for rho in (0.5, 0.25):
+        for k in range(0, 8):
+            for gap in (1.0, 2.0, 0.75):
+                eps = gap * rho**k  # exact in binary
+                assert t_reset(eps, gap, 0.0, rho) == k + 1 == _brute_t_reset(eps, gap, 0.0, rho)
+                assert t_reset(eps, 0.0, gap, rho) == k + 1  # sign of the gap is irrelevant
 
 
 @pytest.mark.xfail(
