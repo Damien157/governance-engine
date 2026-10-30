@@ -25,7 +25,8 @@ Closed-loop identities (V quadratic, Euler):
 Forward invariance (HOCBF): for x_0 with psi1(x_0) = -v_0 + k h_0 >= 0 the QP keeps
 h(x_k) >= 0 up to the Euler discretisation error, for ANY nominal input sequence.
 
-Known defects are recorded as xfail(strict=True); see the two tests at the end.
+The fail-closed behaviour of the controller (solver exception / infeasible barrier row) is checked by the
+regression tests at the end; they replace two former strict-xfail defect tests.
 """
 from __future__ import annotations
 
@@ -367,42 +368,318 @@ def test_simulator_time_grid_and_shapes():
     np.testing.assert_allclose(res.V, [sim.clf.V(x) for x in res.x], atol=1e-12)
 
 
-# ------------------------------------------------------------------ genuine defects (strict xfail)
+# ------------------------------------------------------------------ fail-closed regression tests
+#
+# Notation (cbf.py): h = p_max - p, psi1 = -v + k h, HOCBF row  u <= ub(x) = 0.1 v - k v + alpha1 psi1  (alpha1 = k).
+# For the Euler plant p+ = p + dt v, v+ = v + dt(-0.1 v + u) the identity below is EXACT (no discretisation error):
+#
+#     psi1(x+) = (1 - alpha1 dt) psi1(x) + dt (ub(x) - u)                                   (*)
+#
+# so  u <= ub  keeps {psi1 >= 0} (hence {h >= 0}, since v <= k h there) invariant for dt <= 1/k, while
+# u > ub is exactly the amount by which a command moves the state toward the unsafe set.  Note that h(x+) = h - dt v
+# does NOT depend on u (relative degree 2), so one-step "h(x+) >= h(x+ | u=0)" would be vacuous; we use psi1(x+) and the
+# two-step h(x++) = h(x+) - dt v+, which does depend on u (smaller u => larger v+ reduction => larger h(x++)).
+
+_DT = 0.01
+_K = 2.0
+_UMIN, _UMAX = -50.0, 50.0
+_UNOMS = (-100.0, -50.0, -7.0, 0.0, 7.0, 30.0, 50.0, 100.0)
+
+
+def _psi1(x, k=_K):
+    return -x[1] + k * (1.0 - x[0])
+
+
+def _ub(cbf, x):
+    return cbf.extended_constraint_coeffs(x)[1]
+
+
+def _step(plant, x, u):
+    return plant.euler_step(x, u, _DT)
+
+
+def _state_cases():
+    """Grid + seeded random states; includes HOCBF-infeasible ones (ub < u_min) and psi1 < 0 ones."""
+    grid = [np.array([p, v]) for p in (-1.0, 0.0, 0.5, 0.9, 1.0, 1.2) for v in (-5.0, 0.0, 5.0, 15.0, 20.0, 30.0)]
+    rng = np.random.default_rng(SEED + 11)
+    rand = [np.array([rng.uniform(-1.5, 1.2), rng.uniform(-8.0, 35.0)]) for _ in range(60)]
+    return grid + rand + [_INFEASIBLE_STATE.copy(), np.array([0.9, 15.0])]
+
 
 _INFEASIBLE_STATE = np.array([0.5, 20.0])  # HOCBF bound = -3.9 v + 4 h = -76 < u_min = -50
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG: when the HOCBF row demands u < u_min (e.g. x=[0.5, 20]), CLFCBFQPController.solve "
-        "calls solvers.qp a second time in _solve_cbf_only WITHOUT try/except; CVXOPT raises "
-        "ValueError('domain error') and the exception escapes solve(), so the documented "
-        "last-resort clamp (u_min) is unreachable. Expected: return u = u_min, feasible=False."
-    ),
-)
+def _raise_domain_error(*a, **k):
+    raise ValueError("domain error")
+
+
+def _return_nonoptimal(*a, **k):
+    return {"status": "unknown", "x": None}
+
+
+def _return_nan_solution(*a, **k):
+    from cvxopt import matrix
+
+    return {"status": "optimal", "x": matrix([float("nan")] * 2)}
+
+
+def _assert_never_moves_toward_unsafe_set(plant, cbf, x, u_nom, sol, fail_closed_mode):
+    u = sol["u"]
+    ub = _ub(cbf, x)
+    assert np.isfinite(u) and _UMIN - 1e-12 <= u <= _UMAX + 1e-12
+    # (1) the command satisfies the HOCBF row, or (row infeasible in the box) it is the maximal brake u_min
+    assert u <= max(ub, _UMIN) + 1e-9, f"x={x} u_nom={u_nom}: u={u} > max(ub={ub}, u_min)"
+    # (2) exact one-step identity (*): psi1 only ever shrinks by the unavoidable amount dt*max(0, u_min - ub)
+    psi_next = _psi1(_step(plant, x, u))
+    assert psi_next == pytest.approx((1 - _K * _DT) * _psi1(x) + _DT * (ub - u), abs=1e-9, rel=1e-9)
+    assert psi_next >= (1 - _K * _DT) * _psi1(x) - _DT * max(0.0, _UMIN - ub) - 1e-9
+    if ub < _UMIN:  # infeasible: no admissible input; u_min must be the best possible one-step psi1 and h(x++)
+        assert u == pytest.approx(_UMIN)
+        for u_other in (_UMIN + 1.0, -10.0, 0.0, 10.0, _UMAX, float(np.clip(u_nom, _UMIN, _UMAX))):
+            assert psi_next >= _psi1(_step(plant, x, u_other)) - 1e-12
+        assert sol["feasible"] is False and sol["status"] != "optimal"
+    if fail_closed_mode:
+        # never worse than the nominal input the old code returned on error (clipped to the box)
+        u_ref = float(np.clip(u_nom, _UMIN, _UMAX))
+        assert u <= u_ref + 1e-12
+        assert _psi1(_step(plant, x, u)) >= _psi1(_step(plant, x, u_ref)) - 1e-12
+        x1u, x1r = _step(plant, x, u), _step(plant, x, u_ref)
+        assert x1u[0] == pytest.approx(x1r[0], abs=1e-12)  # h(x+) is independent of u (documented above)
+        assert _step(plant, x1u, 0.0)[0] <= _step(plant, x1r, 0.0)[0] + 1e-12  # h(x++|u) >= h(x++|u_ref)
+        assert sol["status"] != "optimal" and sol["feasible"] is False
+
+
 def test_infeasible_hocbf_returns_max_braking_instead_of_raising():
+    """Bug 1 (fixed): infeasible HOCBF row => max-braking clamp u_min, feasible=False, non-ok status."""
     _, _, cbf, qp = make()
     _, ub = cbf.extended_constraint_coeffs(_INFEASIBLE_STATE)
     assert ub < -50.0  # scenario really is infeasible within the input box
-    sol = qp.solve(_INFEASIBLE_STATE, 7.0)  # raises ValueError today
+    sol = qp.solve(_INFEASIBLE_STATE, 7.0)  # used to raise ValueError('domain error')
     assert sol["feasible"] is False
     assert sol["u"] == pytest.approx(-50.0)
+    assert sol["status"] != "optimal" and np.isnan(sol["delta"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG: for x=[0.9, 15] (HOCBF bound -58.1 < u_min) CVXOPT raises inside the first solve, "
-        "the generic `except Exception` branch returns u = u_nom UNFILTERED (+7: accelerating "
-        "into the barrier, outside the CBF row) with status 'error:domain error'. A safety "
-        "filter must never hand back the raw nominal input when the solver fails; expected "
-        "the clamped/ braking input (<= HOCBF bound or u_min)."
-    ),
-)
 def test_solver_exception_must_not_return_unfiltered_nominal():
+    """Bug 2 (fixed): x=[0.9, 15] is infeasible; the result must be braking, never raw u_nom=+7."""
     _, _, cbf, qp = make()
     x = np.array([0.9, 15.0])
     _, ub = cbf.extended_constraint_coeffs(x)
     sol = qp.solve(x, 7.0)
     assert sol["u"] <= max(ub, -50.0) + 1e-9, f"returned raw u_nom={sol['u']} (status {sol['status']})"
+    assert sol["u"] == pytest.approx(-50.0)
+    assert sol["status"] != "optimal" and sol["feasible"] is False
+
+
+def test_solver_exception_on_feasible_state_clamps_to_hocbf_bound(monkeypatch):
+    """Solver raises at a feasible state: u = clip(min(u_nom, ub)), status 'error:<exc>' (the old code gave u_nom)."""
+    _, _, cbf, qp = make()
+    monkeypatch.setattr(qpmod.solvers, "qp", _raise_domain_error)
+    x = np.array([0.9, 1.0])
+    _, ub = cbf.extended_constraint_coeffs(x)
+    assert -50.0 < ub < 7.0
+    sol = qp.solve(x, 7.0)
+    assert sol["status"] == "error:domain error"
+    assert sol["feasible"] is False
+    assert sol["u"] == pytest.approx(ub, abs=1e-12) and sol["u"] < 7.0
+    # when u_nom already satisfies the row the filtered nominal is passed through unchanged
+    assert qp.solve(x, ub - 3.0)["u"] == pytest.approx(ub - 3.0, abs=1e-12)
+
+
+def test_second_qp_exception_is_caught_and_clamped(monkeypatch):
+    """First QP non-optimal, second QP raises: the last-resort clamp must be reached (Bug 1 mechanism)."""
+    _, _, cbf, qp = make()
+    calls = {"n": 0}
+
+    def first_unknown_then_raise(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"status": "unknown", "x": None}
+        raise ValueError("domain error")
+
+    monkeypatch.setattr(qpmod.solvers, "qp", first_unknown_then_raise)
+    x = np.array([0.9, 1.0])
+    _, ub = cbf.extended_constraint_coeffs(x)
+    sol = qp.solve(x, 30.0)
+    assert calls["n"] == 2
+    assert sol["status"].startswith("fallback_after:unknown")
+    assert sol["feasible"] is False
+    assert sol["u"] == pytest.approx(ub, abs=1e-12) and sol["u"] < 30.0
+
+
+def test_nonfinite_solution_or_nominal_fails_closed(monkeypatch):
+    plant, _, cbf, qp = make()
+    x = np.array([0.9, 1.0])
+    _, ub = cbf.extended_constraint_coeffs(x)
+    monkeypatch.setattr(qpmod.solvers, "qp", _return_nan_solution)
+    sol = qp.solve(x, 7.0)
+    assert sol["status"] == "error:non_finite_solution" and sol["u"] == pytest.approx(ub, abs=1e-12)
+    monkeypatch.setattr(qpmod.solvers, "qp", _raise_domain_error)
+    sol = qp.solve(x, float("nan"))  # NaN nominal: replaced by 0, then clamped to the row
+    assert np.isfinite(sol["u"]) and sol["u"] <= ub + 1e-12 and sol["status"] != "optimal"
+
+
+def test_fail_closed_command_mirrored_rows_and_degenerate_row():
+    """Classic-row mirror (a < 0 => braking is u_max) and |a| ~ 0 (no input can help => 0, never u_nom)."""
+    _, _, _, qp = make()
+    f = qp._fail_closed_command
+    assert f(7.0, 1.0, 3.0) == 3.0 and f(2.0, 1.0, 3.0) == 2.0  # a>0: min(u_nom, b/a)
+    assert f(7.0, 1.0, -80.0) == -50.0  # infeasible: u_min
+    assert f(-7.0, -1.0, 3.0) == -3.0 and f(-9.0, -1.0, 3.0) == -3.0  # a<0: u >= b/a = -3
+    assert f(-7.0, -1.0, -80.0) == 50.0  # mirrored infeasible: u_max
+    assert f(7.0, 0.0, 1.0) == 0.0 and f(1e9, 1e-15, -1.0) == 0.0
+    assert f(7.0, 1.0, float("nan")) == -50.0 and f(7.0, -1.0, float("nan")) == 50.0
+    assert qp._barrier_infeasible(1.0, -50.5) and not qp._barrier_infeasible(1.0, -50.0)
+    assert qp._barrier_infeasible(-1.0, -50.5) and not qp._barrier_infeasible(-1.0, 50.5)  # a<0: u >= b/a
+
+
+@pytest.mark.parametrize("mode", ["natural", "solver_raises", "solver_nonoptimal", "solver_nan"])
+def test_returned_command_never_moves_state_toward_unsafe_set_grid_and_random(monkeypatch, mode):
+    """For a grid + seeded random states (feasible, psi1<0, HOCBF-infeasible) x adversarial u_nom, the returned
+    command satisfies the HOCBF row or is the maximal brake, obeys the exact psi1 identity (*), and (in all
+    solver-failure modes) is never worse than the raw nominal in psi1(x+) and h(x++). Status is never 'ok' when it
+    must not be: always for solver failures, and whenever the row is infeasible. A status-only check would not
+    catch the old defect, hence the dynamics-based assertions above."""
+    plant, _, cbf, qp = make()
+    patch = {
+        "natural": None,
+        "solver_raises": _raise_domain_error,
+        "solver_nonoptimal": _return_nonoptimal,
+        "solver_nan": _return_nan_solution,
+    }[mode]
+    if patch is not None:
+        monkeypatch.setattr(qpmod.solvers, "qp", patch)
+    cases = _state_cases()
+    if mode == "natural":  # real CVXOPT is slow-ish: thin the u_nom set
+        unoms = (-100.0, 0.0, 7.0, 100.0)
+    else:
+        unoms = _UNOMS
+    for x in cases:
+        for un in unoms:
+            sol = qp.solve(x, un)
+            _assert_never_moves_toward_unsafe_set(plant, cbf, x, un, sol, fail_closed_mode=(mode != "natural"))
+
+
+def test_status_is_never_optimal_for_infeasible_barrier_even_with_real_solver():
+    _, _, cbf, qp = make()
+    for x in _state_cases():
+        if _ub(cbf, x) < _UMIN:
+            for un in (-100.0, 7.0, 100.0):
+                sol = qp.solve(x, un)
+                assert sol["status"] == "infeasible_barrier" and sol["u"] == pytest.approx(_UMIN)
+
+
+def _brake_reference(plant, x0, n):
+    xs = [np.array(x0, dtype=float)]
+    for _ in range(n):
+        xs.append(_step(plant, xs[-1], _UMIN))
+    return np.array(xs)
+
+
+def _closed_loop(qp, plant, x0, nominal, n):
+    x = np.array(x0, dtype=float)
+    xs, us, sts = [x.copy()], [], []
+    for k in range(n):
+        sol = qp.solve(x, nominal(k, x))
+        us.append(sol["u"])
+        sts.append(sol["status"])
+        x = _step(plant, x, sol["u"])
+        xs.append(x.copy())
+    return np.array(xs), np.array(us), sts
+
+
+def _adversarial_nominals(rng):
+    return [
+        lambda k, x: 50.0,
+        lambda k, x: 50.0 if (k // 37) % 2 == 0 else -50.0,
+        lambda k, x: float(rng.uniform(-60, 60)),
+    ]
+
+
+_INFEASIBLE_ISH_STARTS = [
+    np.array([0.5, 20.0]),
+    np.array([0.9, 15.0]),
+    np.array([0.2, 28.0]),
+    np.array([0.95, 12.0]),
+    np.array([0.5, 11.0]),  # ub = -3.9*11 + 2*0.5*... > u_min: feasible but psi1 < 0
+]
+
+
+def test_closed_loop_from_infeasible_starts_is_best_effort_brake_until_recovered():
+    """Adversarial u_nom (+50, bang-bang, random) from infeasible-ish starts, real solver.
+
+    What is PROVABLE and asserted (exact, from identity (*)):
+      * every command satisfies the HOCBF row or is the max brake u_min;
+      * psi1 only loses the unavoidable dt*max(0, u_min - ub) per step;
+      * while the row is infeasible the controller applies exactly u_min, so until the first step at which the
+        row becomes feasible the trajectory IS the best-effort brake trajectory (u = u_min is pointwise
+        optimal: p(t) is monotone non-decreasing in u(.) because the impulse response e^{-0.1 t} > 0, so no
+        admissible input has smaller p, i.e. larger h, at any time) and h on that prefix equals the brake's h;
+      * no controller can beat that brake: p_ctrl(k) >= p_brake(k) for all k.
+    What is NOT provable / NOT claimed: if the start is already unrecoverable (even u = u_min drives h < 0, e.g.
+    x=[0.5, 20]: h reaches ~ -3) the state necessarily leaves the safe set; the controller can only match the
+    brake. Also NOT claimed: for starts with psi1 < 0 that max braking WOULD have saved but whose row is
+    feasible, the HOCBF only restores psi1 at rate alpha1 and h may dip below 0 by more than the brake would
+    (pre-existing HOCBF design limit, unchanged by this fix). Forward invariance of h >= 0 is only guaranteed for
+    psi1(x0) >= 0 (covered by test_closed_loop_invariance_*).
+    """
+    plant, _, cbf, qp = make()
+    rng = np.random.default_rng(SEED + 12)
+    n = 120
+    for x0 in _INFEASIBLE_ISH_STARTS:
+        brake = _brake_reference(plant, x0, n)
+        for nominal in _adversarial_nominals(rng):
+            xs, us, sts = _closed_loop(qp, plant, x0, nominal, n)
+            ubs = np.array([_ub(cbf, x) for x in xs[:-1]])
+            assert np.all(us <= np.maximum(ubs, _UMIN) + 1e-9)
+            assert np.all(us >= _UMIN - 1e-12) and np.all(us <= _UMAX + 1e-12)
+            psi = np.array([_psi1(x) for x in xs])
+            lose = (1 - _K * _DT) * psi[:-1] - _DT * np.maximum(0.0, _UMIN - ubs)
+            assert np.all(psi[1:] >= lose - 1e-8)
+            assert np.all(xs[:, 0] >= brake[:, 0] - 1e-9)  # cannot beat the best-effort brake
+            infeasible = ubs < _UMIN
+            first_ok = int(np.argmin(infeasible)) if not infeasible.all() else n
+            if x0[0] == 0.5 and x0[1] == 20.0:
+                assert first_ok > 0  # really starts infeasible
+            assert np.all(us[:first_ok] == _UMIN)
+            np.testing.assert_allclose(xs[: first_ok + 1], brake[: first_ok + 1], atol=1e-9)
+            assert all(s == "infeasible_barrier" for s in sts[:first_ok])
+
+
+def test_closed_loop_with_dead_solver_keeps_safe_set_invariant_for_adversarial_nominal(monkeypatch):
+    """Solver raises at EVERY step (worst case). From psi1(x0) >= 0 the clamp u = clip(min(u_nom, ub)) satisfies the HOCBF
+    row at every step, so by (*) psi1 >= 0 for all k and h >= 0 exactly (dt <= 1/k): the fallback alone preserves
+    the safe set against an adversary pushing +50 / bang-bang / random into the barrier."""
+    plant, _, cbf, qp = make()
+    monkeypatch.setattr(qpmod.solvers, "qp", _raise_domain_error)
+    rng = np.random.default_rng(SEED + 13)
+    starts = [np.array([0.0, 0.0]), np.array([0.9, 0.0]), np.array([0.99, -2.0]), np.array([0.5, 1.0]),
+              np.array([0.9, 2.0 * 0.1])]  # psi1 = 0 exactly
+    starts += [np.array([p, rng.uniform(-3, 2.0 * (1.0 - p))]) for p in rng.uniform(-1.0, 0.99, size=15)]
+    n = 600
+    for x0 in starts:
+        assert _psi1(x0) >= -1e-12
+        for nominal in _adversarial_nominals(rng):
+            xs, us, sts = _closed_loop(qp, plant, x0, nominal, n)
+            assert all(s.startswith("error:") for s in sts)
+            assert min(_psi1(x) for x in xs) >= -1e-9
+            assert np.min(1.0 - xs[:, 0]) >= -1e-9
+
+
+def test_closed_loop_dead_solver_from_unrecoverable_start_matches_brake(monkeypatch):
+    """Solver always raises, start x=[0.5, 20] (unrecoverable: max brake still overshoots the barrier).
+    Honest claim: the state leaves the safe set (no input can prevent it), but the controller applies the maximal
+    brake and the trajectory is identical to the u = u_min reference until the HOCBF row becomes feasible."""
+    plant, _, cbf, qp = make()
+    monkeypatch.setattr(qpmod.solvers, "qp", _raise_domain_error)
+    x0 = _INFEASIBLE_STATE
+    n = 400
+    brake = _brake_reference(plant, x0, n)
+    assert np.min(1.0 - brake[:, 0]) < 0  # unrecoverable: even the best-effort brake leaves the safe set
+    xs, us, _ = _closed_loop(qp, plant, x0, lambda k, x: 50.0, n)
+    assert us[0] == _UMIN
+    ubs = np.array([_ub(cbf, x) for x in xs[:-1]])
+    first_ok = int(np.argmax(ubs >= _UMIN))
+    assert first_ok > 0
+    np.testing.assert_allclose(xs[: first_ok + 1], brake[: first_ok + 1], atol=1e-9)
+    assert np.all(xs[:, 0] >= brake[:, 0] - 1e-9)

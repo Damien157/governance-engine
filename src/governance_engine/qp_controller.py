@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from cvxopt import matrix, solvers
 
@@ -24,6 +26,14 @@ class CLFCBFQPController:
 
     If CLF and CBF conflict, CBF/safety wins: CLF is relaxed with a
     non-negative slack delta maximized against a large penalty.
+
+    Fail-closed contract
+    --------------------
+    ``solve`` never returns the raw nominal input on an error path.  If the
+    solver raises, returns a non-optimal status, produces a non-finite
+    input, or the hard barrier row is infeasible inside the input box, the
+    command comes from :meth:`_fail_closed_command` (derivation there) and
+    the status is never ``"optimal"``.
     """
 
     def __init__(
@@ -98,18 +108,17 @@ class CLFCBFQPController:
         G = matrix(G_np)
         h_mat = matrix(h_np)
 
+        # Hard barrier row infeasible inside the input box: no admissible u
+        # exists, and CVXOPT would raise ValueError('domain error') here.
+        # Skip the solver and brake as hard as the box allows.
+        if self._barrier_infeasible(a_cbf, b_cbf):
+            return self._fail_closed_result(x, u_nom, a_cbf, b_cbf, V, "infeasible_barrier")
+
         try:
             sol = solvers.qp(H, f, G, h_mat)
-        except Exception as exc:  # pragma: no cover
-            return {
-                "u": u_nom,
-                "delta": 0.0,
-                "status": f"error:{exc}",
-                "feasible": False,
-                "u_nom": u_nom,
-                "h": self.cbf.h(x),
-                "V": V,
-            }
+        except Exception as exc:
+            # Fail closed: NEVER hand back the unfiltered nominal input.
+            return self._fail_closed_result(x, u_nom, a_cbf, b_cbf, V, f"error:{exc}")
 
         status = sol["status"]
         if status != "optimal" or sol["x"] is None:
@@ -117,6 +126,8 @@ class CLFCBFQPController:
             return self._solve_cbf_only(x, u_nom, a_cbf, b_cbf, V, status)
 
         z = np.array(sol["x"]).reshape(2)
+        if not np.all(np.isfinite(z)):
+            return self._fail_closed_result(x, u_nom, a_cbf, b_cbf, V, "error:non_finite_solution")
         return {
             "u": float(z[0]),
             "delta": float(z[1]),
@@ -149,32 +160,107 @@ class CLFCBFQPController:
             dtype=float,
         )
         h_np = np.array([b_cbf, self.u_max, -self.u_min], dtype=float)
-        sol = solvers.qp(H, f, matrix(G_np), matrix(h_np))
-        if sol["status"] != "optimal" or sol["x"] is None:
-            # Last resort: clamp to feasible CBF bound if a_cbf > 0
-            u_safe = u_nom
-            if abs(a_cbf) > 1e-12:
-                # a u <= b => u <= b/a if a>0, u >= b/a if a<0
-                if a_cbf > 0:
-                    u_safe = min(u_nom, b_cbf / a_cbf)
-                else:
-                    u_safe = max(u_nom, b_cbf / a_cbf)
-            u_safe = float(np.clip(u_safe, self.u_min, self.u_max))
-            return {
-                "u": u_safe,
-                "delta": float("nan"),
-                "status": f"fallback_after:{prior_status}",
-                "feasible": False,
-                "u_nom": u_nom,
-                "h": self.cbf.h(x),
-                "V": V,
-            }
-        u = float(np.array(sol["x"]).ravel()[0])
+        try:
+            sol = solvers.qp(H, f, matrix(G_np), matrix(h_np))
+        except Exception as exc:
+            # e.g. CVXOPT ValueError('domain error') on an infeasible row.
+            # Previously this escaped solve() and the last-resort clamp below
+            # was unreachable.
+            return self._fail_closed_result(
+                x, u_nom, a_cbf, b_cbf, V, f"fallback_after:{prior_status}|{exc}"
+            )
+        sol_u = None
+        if sol["status"] == "optimal" and sol["x"] is not None:
+            sol_u = float(np.array(sol["x"]).ravel()[0])
+            if not math.isfinite(sol_u):
+                sol_u = None
+        if sol_u is None:
+            # Last resort: clamp to feasible CBF bound
+            return self._fail_closed_result(
+                x, u_nom, a_cbf, b_cbf, V, f"fallback_after:{prior_status}"
+            )
         return {
-            "u": u,
+            "u": sol_u,
             "delta": float("nan"),
             "status": f"cbf_only_after:{prior_status}",
             "feasible": True,
+            "u_nom": u_nom,
+            "h": self.cbf.h(x),
+            "V": V,
+        }
+
+    # ------------------------------------------------------------------
+    # Fail-closed fallback
+    # ------------------------------------------------------------------
+
+    _ROW_EPS = 1e-12
+
+    def _barrier_infeasible(self, a_cbf: float, b_cbf: float) -> bool:
+        """True iff {u in [u_min, u_max] : a_cbf u <= b_cbf} is empty."""
+        if not (math.isfinite(a_cbf) and math.isfinite(b_cbf)):
+            return False  # let the solver / fail-closed path deal with it
+        if abs(a_cbf) <= self._ROW_EPS:
+            return b_cbf < 0.0  # 0 <= b violated, no input can fix it
+        bound = b_cbf / a_cbf
+        if a_cbf > 0:
+            return bound < self.u_min
+        return bound > self.u_max
+
+    def _fail_closed_command(self, u_nom: float, a_cbf: float, b_cbf: float) -> float:
+        """
+        Safe input when the QP cannot be trusted.  Pure arithmetic, no solver.
+
+        Math (from the real barrier in cbf.py).  h(x) = p_max - p, relative
+        degree 2, psi_1 = dh/dt + k h = -v + k h, and the HOCBF condition
+        ``psi_1' + alpha_1 psi_1 >= 0`` is, for xdot = [v, -0.1 v + u],
+        exactly the affine row ``a_cbf * u <= b_cbf`` with a_cbf = 1 and
+        b_cbf = 0.1 v - k v + alpha_1 psi_1.  For the plant,
+        ``psi_1' + alpha_1 psi_1 = b_cbf - u``, strictly DECREASING in u:
+        a larger u accelerates the mass into the barrier p = p_max.
+
+        * Row feasible in the box (``b_cbf/a_cbf >= u_min`` for a_cbf > 0):
+          u = clip(min(u_nom, b_cbf/a_cbf), u_min, u_max).  Every u <= b/a
+          satisfies the HOCBF row, so {psi_1 >= 0} (hence {h >= 0}) stays
+          forward invariant, and u is the admissible input closest to u_nom.
+        * Row infeasible in the box (b/a < u_min): no admissible input exists.
+          The clip then lands on the braking extreme u_min.  This maximises
+          ``psi_1' + alpha_1 psi_1 = b - u`` over the box, and because the
+          impulse response of the plant (e^{-0.1 t} > 0) is positive, the
+          input u(.) = u_min gives the pointwise smallest position p(t), i.e.
+          the largest h(t), among all input signals in the box.
+        * For a_cbf < 0 (classic row, mirrored): u = clip(max(u_nom, b/a)),
+          braking extreme u_max when infeasible.
+        * |a_cbf| ~ 0: the row does not depend on u, so no input can help;
+          return 0 clipped to the box (never u_nom).
+        * Non-finite u_nom is replaced by 0; a non-finite b_cbf (NaN state)
+          yields the braking extreme.
+        """
+        u_ref = u_nom if math.isfinite(u_nom) else 0.0
+        if abs(a_cbf) <= self._ROW_EPS or not math.isfinite(a_cbf):
+            u_safe = 0.0
+        elif not math.isfinite(b_cbf):
+            u_safe = self.u_min if a_cbf > 0 else self.u_max
+        else:
+            bound = b_cbf / a_cbf
+            u_safe = min(u_ref, bound) if a_cbf > 0 else max(u_ref, bound)
+        return float(np.clip(u_safe, self.u_min, self.u_max))
+
+    def _fail_closed_result(
+        self,
+        x: np.ndarray,
+        u_nom: float,
+        a_cbf: float,
+        b_cbf: float,
+        V: float,
+        status: str,
+    ) -> dict:
+        """Result dict for every non-optimal path; ``status`` is never 'optimal'."""
+        return {
+            "u": self._fail_closed_command(u_nom, a_cbf, b_cbf),
+            "delta": float("nan"),
+            "status": status,
+            "feasible": False,
+            "fail_closed": True,
             "u_nom": u_nom,
             "h": self.cbf.h(x),
             "V": V,
