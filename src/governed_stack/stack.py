@@ -370,6 +370,20 @@ class GovernedStack:
             except Exception as exc:
                 notes.append(f"qp_solver_error:{exc}")
                 solver = {"kind": "control", "error": str(exc)}
+            # Tighten-only: a crashed, infeasible, or non-ok QP step BLOCKs.
+            # Never loosens; runs after the ops layer (and any voucher), so a
+            # voucher cannot reopen it.
+            qp_reasons = self._qp_block_reasons(solver)
+            if qp_reasons:
+                if decision == "ALLOW":
+                    notes.append(
+                        "qp override: CGE logged ALLOW; stack overrides "
+                        "decision to BLOCK without a second audit write"
+                    )
+                decision = "BLOCK"
+                for r in qp_reasons:
+                    if r not in reasons:
+                        reasons.append(r)
 
         code = map_error_code(decision=decision, reasons=reasons, notes=notes)
         return self._envelope(
@@ -428,6 +442,27 @@ class GovernedStack:
             "hit_imprint_reversed": float(hit),
             "in_L": key in L_labels,
         }
+
+    # QP statuses that count as a usable control step (see qp_controller):
+    # "optimal" and the feasible CBF-only fallback "cbf_only_after:<prior>".
+    QP_OK_STATUS = "optimal"
+    QP_OK_PREFIXES = ("cbf_only_after:",)
+
+    @classmethod
+    def _qp_block_reasons(cls, solver: Optional[Dict[str, Any]]) -> list:
+        """Reasons to BLOCK a control step; empty list means the step is ok."""
+        if not solver or solver.get("kind") != "control":
+            return []
+        if "error" in solver:
+            return ["qp:solver_error"]
+        out = []
+        if solver.get("feasible") is not True:
+            out.append("qp:infeasible")
+        status = solver.get("status")
+        st = str(status) if status is not None else "none"
+        if not (st == cls.QP_OK_STATUS or st.startswith(cls.QP_OK_PREFIXES)):
+            out.append(f"qp:status:{st}")
+        return out
 
     def _run_qp_step(self, intent: dict) -> Dict[str, Any]:
         import numpy as np
