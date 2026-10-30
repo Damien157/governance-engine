@@ -21,6 +21,12 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 |-----|----------|
 | **`require_persisted_key` stub in sidecar** — `_build_stack` did `pass` then built `CryptoEngine` **without** the flag; LocalPEM only refused `path=None`, so a missing PEM path still **auto-generated** under production `GOVERNANCE_REQUIRE_PERSISTED_KEY=1`. | LocalPEM raises `FileNotFoundError` when require is set and the path is missing; sidecar passes `require_persisted_key` into `CryptoEngine`; `rotate()` still intentionally creates after backup (`require=False`). |
 
+## Control QP result ignored by the decision
+
+| Bug | Solution |
+|-----|----------|
+| **QP outcome never gated `govern()`** — the `control` step stored `status`/`feasible` in `solver` but the decision never read them; a solver exception only added note `qp_solver_error:…`. An infeasible or crashed safety solve could return **ALLOW**. | Tighten-only after the step: solver exception → `qp:solver_error`, `feasible` not true → `qp:infeasible`, status not `optimal` / `cbf_only_after:*` → `qp:status:<status>`; any of these → **BLOCK** (`error_code=GOV_INTERNAL`). Never loosens REVIEW/BLOCK; runs after the ops layer, so an approval voucher cannot reopen it. CGE audit row keeps the ops ALLOW (`audit.ops_decision`) with an override note, as for the HAIS cap. Tests: `tests/test_governed_stack_qp_block.py` (monkeypatched + real CVXOPT). |
+
 ## 0.4.4 — bug→fix pass
 
 | Bug | Solution |
