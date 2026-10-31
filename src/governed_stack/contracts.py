@@ -1146,6 +1146,9 @@ def map_error_code(
         for r in rs
     ):
         return GOV_AUTH_FAILED
+    if dec == "BLOCK" and any(r.startswith("qp:") for r in rs):
+        # Control QP solver failed / infeasible: fail-closed internal safety block.
+        return GOV_INTERNAL
     if dec == "REVIEW":
         return GOV_POLICY_REVIEW
     if dec == "BLOCK":

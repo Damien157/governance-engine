@@ -34,7 +34,7 @@ This is **not** a P vs NP proof, a theory of everything, AGI, a formal certifica
 | **core** | `CertifiedGovernanceEngine` (+ optional ZK) | `hais/certified_governance.py`, `hais/zk_enhanced_governance.py` | Fallback ops layer |
 | **core** | `SovereignKernel` | `hais/hais_unified_kernel.py` | Yes — sigmoid **m=0.5**, cap `exp(-2.2·S·τ)` |
 | **core** | `Haven2Engine` | `haven2/src/haven2` | Yes — energy + latch |
-| **core** | `CLFCBFQPController` | `src/governance_engine` | Yes — only when `action=control` and ALLOW |
+| **core** | `CLFCBFQPController` | `src/governance_engine` | Yes — only when `action=control` and ALLOW; an infeasible step, non-ok status or solver error tightens ALLOW → BLOCK (never loosens) |
 | **core** | imprint 3DM | `imprint/src/imprint` | Yes — only when `action=3dm` and ALLOW |
 | **sketch** | `HAIS3SATSolver` | `solvers/hais_3sat.py` | **No** |
 | **sketch** | invariant topology diagnostics | `diagnostics/invariant_topology.py` | **No** |
@@ -56,7 +56,7 @@ Inventory helpers: `governed_stack.catalog.TIERS`, `describe()`, `import_check()
 3. **Haven2** — step energy; expose realm / `p_hat` / open.
 4. **Solvers** (only if ALLOW **and** (transistor open **or** `action == "query"`)):
    - `action == "3dm"` → one demo 3DM collapse via imprint
-   - `action == "control"` → one QP step from `u_nom` (live `governance_engine`, not the incomplete control sketch)
+   - `action == "control"` → one QP step from `u_nom` (live `governance_engine`, not the incomplete control sketch). A non-feasible step (`qp:infeasible`), any status other than `optimal`, including the `cbf_only_after:*` fallback (`qp:status:<status>`) or a solver exception (`qp:solver_error`) tightens the decision to **BLOCK** with that reason (`error_code=GOV_INTERNAL`); this BLOCK has no REVIEW / voucher path (it is applied after the ops layer, where vouchers are honoured).
 
 Envelope: `{decision, reasons, entry_id, hais{cap,risk,instability}, haven2{realm,p_hat,open}, solver?, audit?, notes?}`.
 

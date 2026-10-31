@@ -67,6 +67,7 @@ Sketches remain importable for demos and are **never** consulted for ALLOW / BLO
 | — | Latch VERIFY honesty + hosted check contract + smoke | `c1dce42` #8 | **Reported** (honesty wording + smoke 8/8) |
 | — | Hosted-check eval on live sidecar + ActionBus | `286fcb0` #9 | **Reported** (10/10 local) |
 | — | Audit-only `project_governance_score` + eval 12 + unit tests | `a6ce977` #10 | **Verified** once Damien reviewed real source + `rg` (audit-only); local 12/12 **reported** |
+| — | Control QP infeasible / non-ok status / solver error → **BLOCK** (`qp:*`, `GOV_INTERNAL`; tighten-only, no voucher path) | branch `fix/qp-govern-block` (local, not merged) | **Reported** local green |
 
 Open integrity questions **A/B/C** from the review trail:
 
