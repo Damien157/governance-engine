@@ -57,6 +57,7 @@ Inventory helpers: `governed_stack.catalog.TIERS`, `describe()`, `import_check()
 4. **Solvers** (only if ALLOW **and** (transistor open **or** `action == "query"`)):
    - `action == "3dm"` → one demo 3DM collapse via imprint
    - `action == "control"` → one QP step from `u_nom` (live `governance_engine`, not the incomplete control sketch)
+     - if that step has `feasible=False`, a non-`optimal` status, `fail_closed=True`, or a solver error, the envelope is tightened to **BLOCK** (tighten-only; never loosens), with reason `qp_not_feasible:<status>` / `qp_solver_error` and `audit.qp_tightened` recorded
 
 Envelope: `{decision, reasons, entry_id, hais{cap,risk,instability}, haven2{realm,p_hat,open}, solver?, audit?, notes?}`.
 
