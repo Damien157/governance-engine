@@ -1326,11 +1326,50 @@ _CBRN_STRONG_VERBS = (
 _CBRN_BUILD_VERBS = r"(?:make|making|build|building|construct\w*|assembl\w*|brew\w*|create|creating)"
 _RM_FLAGS = r"(?:-{1,2}[a-z][a-z-]*\s+)*"
 _RM_RF = r"-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*"
+# Recursive + force in ANY mix/order, separate or combined: -rf, -fr, -Rf,
+# -r -f, -f -R, --recursive --force, -r --force ... (case-insensitive).
+# Both lookaheads walk the flag tokens only; a lone -f or -r never matches.
+_RM_FLAG_TOK = r"-{1,2}[a-z][a-z-]*"
+_RM_RF_ANY = (
+    rf"(?=(?:{_RM_FLAG_TOK}\s+)*?(?:-[a-z]*r[a-z]*\b|--recursive\b))"
+    rf"(?=(?:{_RM_FLAG_TOK}\s+)*?(?:-[a-z]*f[a-z]*\b|--force\b))"
+    rf"(?:{_RM_FLAG_TOK}\s+)*{_RM_FLAG_TOK}"
+)
 _RM_ROOT_TARGET = (
     r"(?:--no-preserve-root\s+)?(?:/\*?|~/?\*?|\*|\$\{?home\}?/?\*?"
     r"|/(?:etc|usr|var|home|boot|bin|sbin|lib\w*|opt|root|srv|dev|sys|proc|mnt|data)\b\S*)"
     r"(?=\s|$|[\\\x22';&|)])"
 )
+
+
+def _ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalized_scan_text(obj: Any) -> str:
+    """Every string leaf of ``obj`` (recursively, dict values + list items),
+    whitespace-normalised, each source line separately as well as whole; lists
+    of strings are also joined with spaces (argv). One fragment per line."""
+    out: List[str] = []
+
+    def walk(o: Any) -> None:
+        if isinstance(o, str):
+            out.append(_ws(o))
+            for line in o.splitlines():
+                if line.strip():
+                    out.append(_ws(line))
+        elif isinstance(o, dict):
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, (list, tuple)):
+            strs = [x for x in o if isinstance(x, (str, int, float)) and not isinstance(x, bool)]
+            if strs:
+                out.append(_ws(" ".join(str(x) for x in strs)))
+            for v in o:
+                walk(v)
+
+    walk(obj)
+    return "\n".join(f for f in out if f)
 
 
 def _normalize_action_name(name: str) -> str:
@@ -1355,7 +1394,7 @@ def _tool_safety_banned_terms() -> List["PolicyRule"]:
 
     return [
         # ---- destructive / irreversible: BLOCK --------------------------------
-        r("tool_rm_rf_root", rf"\brm\s+{_RM_FLAGS}{_RM_RF}\s+{_RM_ROOT_TARGET}"
+        r("tool_rm_rf_root", rf"\brm\s+{_RM_RF_ANY}\s+{_RM_ROOT_TARGET}"
           r"|--no-preserve-root", "BLOCK", "banned_term:destructive:rm_rf_root", prose),
         r("tool_drop_database", r"\bdrop\s+(?:database|schema)\b", "BLOCK",
           "banned_term:destructive:drop_database", prose),
@@ -1375,7 +1414,7 @@ def _tool_safety_banned_terms() -> List["PolicyRule"]:
           r"(?:databases?|disks?|drives?|filesystem|file\s+system|servers?|backups?|hard\s*drives?)\b",
           "BLOCK", "banned_term:destructive:wipe_everything", prose),
         # ---- destructive but ambiguous: REVIEW --------------------------------
-        r("tool_rm_rf_other", rf"\brm\s+{_RM_FLAGS}{_RM_RF}\b", "REVIEW",
+        r("tool_rm_rf_other", rf"\brm\s+{_RM_RF_ANY}(?=\s|$)", "REVIEW",
           "banned_term:destructive_review:rm_rf", prose),
         r("tool_drop_truncate_table", r"\b(?:drop|truncate)\s+table\b", "REVIEW",
           "banned_term:destructive_review:drop_table", prose),
@@ -1534,7 +1573,10 @@ class PolicyEngine:
             decision_hint: "BLOCK", "REVIEW", or "ALLOW" (hint only)
             reasons: list of policy reasons
         """
-        text = json.dumps(intent)
+        # JSON dump (historical behaviour) PLUS a normalised view of every
+        # string leaf: JSON escapes tabs/newlines as literal "\\t"/"\\n", so
+        # ``rm\\t-rf /`` or a second line never met ``\\s``. Fail closed.
+        text = json.dumps(intent, default=str) + "\n" + _normalized_scan_text(intent)
         reasons: List[str] = []
         actions: List[str] = []
 
