@@ -46,7 +46,7 @@ AREAS: list[tuple[str, str]] = [
     ("bio_judge_kernel_overlay", r"bio_"),
     ("audit", r"audit|spectral|observability|review"),
     ("control_loop_qp", r"osqp|clf_cbf|control_logic|math_cores|lie_and|safety_sim|qp_controller|invariant"),
-    ("governance_gate", r"governed_stack|contracts|key_providers|sidecar|runtime_bridge|governed_algorithm|runner_coverage"),
+    ("governance_gate", r"governed_stack|stack_qp|contracts|key_providers|sidecar|runtime_bridge|governed_algorithm|runner_coverage"),
     ("unified_all_works", r"unified|all_works|quantum_line"),
 ]
 
