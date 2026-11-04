@@ -1335,9 +1335,22 @@ _RM_RF_ANY = (
     rf"(?=(?:{_RM_FLAG_TOK}\s+)*?(?:-[a-z]*f[a-z]*\b|--force\b))"
     rf"(?:{_RM_FLAG_TOK}\s+)*{_RM_FLAG_TOK}"
 )
+# Recursive (with or without force) -- used for ROOT targets only: ``rm -r /``
+# and ``rm -r -I /`` are just as destructive as ``rm -rf /``.
+_RM_R_ANY = (
+    rf"(?=(?:{_RM_FLAG_TOK}\s+)*?(?:-[a-z]*r[a-z]*\b|--recursive\b))"
+    rf"(?:{_RM_FLAG_TOK}\s+)*{_RM_FLAG_TOK}"
+)
+# Top-level system dirs. The dir itself or ONE level below it BLOCKs
+# (/home, /home/user, /etc/ssl, /var/lib); deeper paths (/home/me/proj/dist,
+# /var/tmp/x) fall through to the ordinary rm_rf REVIEW. Any ``..`` segment
+# in a path is treated as a root target (could climb anywhere).
+_RM_SYS_DIRS = r"(?:etc|usr|var|home|boot|bin|sbin|lib\w*|opt|root|srv|dev|sys|proc|mnt|data)"
 _RM_ROOT_TARGET = (
-    r"(?:--no-preserve-root\s+)?(?:/\*?|~/?\*?|\*|\$\{?home\}?/?\*?"
-    r"|/(?:etc|usr|var|home|boot|bin|sbin|lib\w*|opt|root|srv|dev|sys|proc|mnt|data)\b\S*)"
+    r"(?:--\s+)?(?:--no-preserve-root\s+)?(?:--\s+)?"
+    r"(?:/(?:\./?)*\*?|~/?\*?|\*|\$\{?home\}?/?\*?"
+    rf"|/{_RM_SYS_DIRS}(?:/[^/\s;&|)]*)?/?\*?"
+    r"|\S*/\.\.(?=/|\s|$)\S*)"
     r"(?=\s|$|[\\\x22';&|)])"
 )
 
@@ -1346,25 +1359,46 @@ def _ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _nfkc_strip_cf(text: str) -> str:
+    """NFKC-fold (fullwidth ｒｍ / U+FF0D -> ASCII) and drop format chars
+    (zero-width space/joiners, bidi marks: Unicode category Cf)."""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", text)
+    return "".join(ch for ch in t if unicodedata.category(ch) != "Cf")
+
+
+def _shell_unquote(text: str) -> str:
+    """Shell-ish view: quotes/backslashes removed (``r''m``, ``r\\m``, ``'/'``)."""
+    return re.sub(r"[\\'\x22`]", "", text)
+
+
 def _normalized_scan_text(obj: Any) -> str:
-    """Every string leaf of ``obj`` (recursively, dict values + list items),
-    whitespace-normalised, each source line separately as well as whole; lists
-    of strings are also joined with spaces (argv). One fragment per line."""
+    """Every string leaf of ``obj`` (recursively, dict keys + values, list
+    items), NFKC-folded with Cf chars stripped, whitespace-normalised, each
+    source line separately as well as whole, plus a shell-unquoted variant;
+    lists of strings are also joined with spaces (argv). One fragment per line."""
     out: List[str] = []
+
+    def add(raw: str) -> None:
+        t = _nfkc_strip_cf(raw)
+        for v in (t, _shell_unquote(t)):
+            out.append(_ws(v))
+            for line in v.splitlines():
+                if line.strip():
+                    out.append(_ws(line))
 
     def walk(o: Any) -> None:
         if isinstance(o, str):
-            out.append(_ws(o))
-            for line in o.splitlines():
-                if line.strip():
-                    out.append(_ws(line))
+            add(o)
         elif isinstance(o, dict):
-            for v in o.values():
+            for k, v in o.items():
+                if isinstance(k, str):
+                    add(k)
                 walk(v)
         elif isinstance(o, (list, tuple)):
             strs = [x for x in o if isinstance(x, (str, int, float)) and not isinstance(x, bool)]
             if strs:
-                out.append(_ws(" ".join(str(x) for x in strs)))
+                add(" ".join(str(x) for x in strs))
             for v in o:
                 walk(v)
 
@@ -1394,8 +1428,16 @@ def _tool_safety_banned_terms() -> List["PolicyRule"]:
 
     return [
         # ---- destructive / irreversible: BLOCK --------------------------------
-        r("tool_rm_rf_root", rf"\brm\s+{_RM_RF_ANY}\s+{_RM_ROOT_TARGET}"
+        r("tool_rm_rf_root", rf"\brm\s+{_RM_R_ANY}\s+{_RM_ROOT_TARGET}"
           r"|--no-preserve-root", "BLOCK", "banned_term:destructive:rm_rf_root", prose),
+        r("tool_find_delete_root",
+          r"\bfind\s+(?:/|~|\$\{?home\}?)/?(?=\s)[^\n;&|]*\s-delete\b"
+          r"|\bfind\s+(?:/|~)/?(?=\s)[^\n;&|]*-exec\s+rm\s+-[a-z]*r",
+          "BLOCK", "banned_term:destructive:find_delete_root", prose),
+        r("tool_decode_pipe_shell",
+          r"\bbase(?:64|32)\s+(?:-\w+\s+)*(?:-d|-D|--decode)\b[^\n;&]*\|\s*(?:sudo\s+)?"
+          r"(?:/usr)?(?:/bin/)?(?:ba|z|da|k|c|tc|fi)?sh\b",
+          "BLOCK", "banned_term:destructive:decode_pipe_shell", prose),
         r("tool_drop_database", r"\bdrop\s+(?:database|schema)\b", "BLOCK",
           "banned_term:destructive:drop_database", prose),
         r("tool_format_disk",

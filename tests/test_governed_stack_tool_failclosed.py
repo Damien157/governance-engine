@@ -105,3 +105,67 @@ def test_rm_regex_unit():
     for t in ["rm file.txt", "rm -f build.log", "rm -r build/", "rm -i /"]:
         assert "banned_term:destructive:rm_rf_root" not in hits(t), t
     assert "banned_term:destructive_review:rm_rf" in hits("rm -r -f build/")
+
+
+# ---- review gaps (PR #33 follow-up) ----------------------------------------
+
+ROOT_GAP_BLOCK = [
+    # 1. recursive without force on a root target
+    "rm -r /", "rm --recursive /", "rm -r -I /",
+    # 2. end-of-options / quoted / dot root
+    "rm -rf -- /", "rm -rf '/'", 'rm -rf "/"', "rm -rf /.",
+    # 3. unicode + quoting tricks
+    "r\u200bm -rf /", "rm \uff0drf /", "\uff52\uff4d -rf /", "r''m -rf /", "r\\m -rf /",
+    # 5. top-level system dirs and one level below still BLOCK
+    "rm -rf /home", "rm -rf /home/", "rm -rf /home/user", "rm -rf /var", "rm -rf /etc",
+    "rm -rf /usr/lib", "rm -rf /home/me/../..",
+]
+
+
+@pytest.mark.parametrize("cmd", ROOT_GAP_BLOCK, ids=repr)
+def test_rm_root_gaps_block(tool, cmd):
+    r = tool.check_sync(intent={"action": "shell", "cmd": cmd})
+    assert r["decision"] == "BLOCK", r
+    assert "banned_term:destructive:rm_rf_root" in (r["reasons"] or [])
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf /home/me/proj/dist", "rm -rf /var/tmp/x"], ids=repr)
+def test_rm_deep_paths_review_not_root(tool, cmd):
+    r = tool.check_sync(intent={"action": "shell", "cmd": cmd})
+    assert r["decision"] == "REVIEW", r
+    assert "banned_term:destructive:rm_rf_root" not in (r["reasons"] or [])
+
+
+@pytest.mark.parametrize("cmd,want", [
+    ("rm -f build.log", "ALLOW"), ("git rm -r --cached foo", "ALLOW"),
+    ("rm -rf ./build", "REVIEW"), ("rm -rf /tmp/cache", "REVIEW"),
+], ids=repr)
+def test_rm_benign_unchanged(tool, cmd, want):
+    assert tool.check_sync(intent={"action": "shell", "cmd": cmd})["decision"] == want
+
+
+@pytest.mark.parametrize("intent", [
+    {"action": "shell", ("k",): "rm -rf /"},
+    {"action": "shell", "payload": {"cmd": "ls", ("a", 1): "x"}},
+], ids=repr)
+def test_non_str_key_clean_block(tool, intent):
+    r = tool.check_sync(intent=intent)
+    assert r["decision"] == "BLOCK", r
+    assert r["error_code"] == "GOV_INTENT_INVALID"
+
+
+@pytest.mark.parametrize("cmd,reason", [
+    ("find / -delete", "banned_term:destructive:find_delete_root"),
+    ("find / -name x -exec rm -rf {} +", "banned_term:destructive:find_delete_root"),
+    ("echo cm0gLXJmIC8= | base64 -d | sh", "banned_term:destructive:decode_pipe_shell"),
+    ("base64 --decode p.txt | sudo bash", "banned_term:destructive:decode_pipe_shell"),
+], ids=repr)
+def test_find_delete_and_decode_pipe_block(tool, cmd, reason):
+    r = tool.check_sync(intent={"action": "shell", "cmd": cmd})
+    assert r["decision"] == "BLOCK", r
+    assert reason in (r["reasons"] or [])
+
+
+@pytest.mark.parametrize("cmd", ["find . -name '*.pyc' -delete", "base64 -d blob > out.bin"], ids=repr)
+def test_find_and_decode_benign_not_blocked(tool, cmd):
+    assert tool.check_sync(intent={"action": "shell", "cmd": cmd})["decision"] != "BLOCK"
