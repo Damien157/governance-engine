@@ -42,6 +42,20 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 |-----|----------|
 | Concurrent audit writers could race on hash-chain linking when timestamps were assigned outside the single-writer lock. | Assign monotonic timestamp **under** the audit write lock; soak test covers concurrent append + verify. |
 
+## Audit-log truncation guard (fail closed)
+
+| Bug | Solution |
+|-----|----------|
+| The signed SHA-256 hash chain could not detect a dropped **tail**: deleting the last N rows, deleting the per-key `audit.db`, or restoring an older copy left a chain that still verified, so decisions carried on as if nothing happened (pinned as a known limitation in `test_math_audit_hashchain.py`). | `AuditStorage` now keeps a **signed head anchor** `{seq, head_hash}` in a sidecar file `<db_path>.anchor` (outside the DB). After each committed append it is atomically advanced (temp file + `os.replace`), and only forward, and only when the previously anchored head is still at the same position in the chain. `verify_chain()` (run before every decision) returns `anchor_ok`/`anchor_reason`. A chain shorter than `seq`, a different hash at position `seq`, an anchor with a bad signature or unreadable contents, or an anchor deleted while the process is running sets `valid=False`, and `execute_governed_action` returns a terminal **BLOCK** with reason `audit_truncation:<reason>`. That BLOCK is never REVIEW, is never served from the decision cache, and no approval voucher can reopen it. A legacy DB with no anchor gets one on first open, but only if its chain verifies. Tests: `tests/test_audit_truncation_guard.py`. |
+
+**Limits (by design, documented):**
+- An attacker who controls both the log *and* the anchor file (for example, deletes both, or restores an old DB together with its old anchor) is not detected. The anchor is in a separate file, not on separate trust infrastructure. Stronger options would be to pin `seq/head_hash` externally (a WORM bucket, a transparency log, or a remote witness) or to hold the anchor where the DB writer cannot write.
+- Deleting the anchor *and* truncating while the engine is stopped looks like a legacy DB on the next open, so it is re-bootstrapped and accepted. While the process is running, deleting the anchor is caught (`anchor_missing`).
+- Anyone holding the signing key can forge an anchor. The anchor gives no more protection than the key.
+- A crash between the DB commit and the anchor write leaves the anchor one entry behind. That is still sound, because it only guards a shorter prefix, so it is not flagged.
+- The anchor binds the DB file's basename (`audit.db`), not its full path. Anchors for different keys are told apart by living next to their own DB. Copying another key's anchor that uses the same signing key and has a matching prefix is not detected.
+- Recovery after a real incident is a deliberate operator step: restore the correct DB, or remove the anchor after investigating. Until then the guard keeps blocking.
+
 ## Residual known issues
 
 - `adaptive_re_update_unclamped` remains available and can overshoot by design (opt-in regression).

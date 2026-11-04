@@ -114,8 +114,8 @@ Residual risk (unchanged by the fix, documented rather than hidden):
   although max braking would have avoided it (e.g. `[-0.121, 4.179]`, dt=0.02: controller min h = -0.117, brake min h = +0.90).
   This is a property of the HOCBF design on the "optimal" path, not of the error paths, and is not changed here.
 
-Also noted but pinned rather than xfailed: the audit hash chain cannot detect truncation of the **tail**
-(`test_tail_truncation_is_NOT_detectable_known_limitation`); the `quantum_line` module docstring says "four integer
+Also noted: the bare audit hash chain cannot detect truncation of the **tail**
+(now detected by the signed head anchor, `test_tail_truncation_is_detected_by_head_anchor`; see BUGFIXES "Audit-log truncation guard"); the `quantum_line` module docstring says "four integer
 digits" but `{:+015.8f}` yields five (the width 150 itself is correct).
 
 ## Deliberately not covered
