@@ -67,6 +67,7 @@ Sketches remain importable for demos and are **never** consulted for ALLOW / BLO
 | — | Latch VERIFY honesty + hosted check contract + smoke | `c1dce42` #8 | **Reported** (honesty wording + smoke 8/8) |
 | — | Hosted-check eval on live sidecar + ActionBus | `286fcb0` #9 | **Reported** (10/10 local) |
 | — | Audit-only `project_governance_score` + eval 12 + unit tests | `a6ce977` #10 | **Verified** once Damien reviewed real source + `rg` (audit-only); local 12/12 **reported** |
+| — | Control QP infeasible / non-ok status / solver error → **BLOCK** (`qp_not_feasible:<status>` / `qp_solver_error`, `GOV_INTERNAL`, `audit.qp_tightened`; tighten-only, no voucher path) | `e327e71` #31 (real-CVXOPT tests carried over from #32) | **Reported** local green |
 
 Open integrity questions **A/B/C** from the review trail:
 
