@@ -198,6 +198,15 @@ class GovernedStack:
                 )
                 return envelope
 
+            _payload = intent.get("payload") if isinstance(intent, dict) else None
+            if _payload is not None and not isinstance(_payload, dict):
+                # Fail closed: a non-dict payload is never scanned field-by-field
+                # downstream; BLOCK instead of crashing or allowing.
+                raise IntentValidationError(
+                    f"payload must be an object, got {type(_payload).__name__}",
+                    errors=[{"type": "dict_type", "loc": ["payload"],
+                             "msg": "payload must be an object"}],
+                )
             envelope = await self._govern_inner(intent, token, **opts)
         except IntentValidationError as exc:
             latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -297,7 +306,8 @@ class GovernedStack:
 
         difficulty = intent.get("difficulty")
         if difficulty is None:
-            difficulty = (intent.get("payload") or {}).get("difficulty", 0.5)
+            _p = intent.get("payload")
+            difficulty = _p.get("difficulty", 0.5) if isinstance(_p, dict) else 0.5
         x = float(difficulty)
 
         # ---- b) HAIS sovereign kernel ------------------------------------

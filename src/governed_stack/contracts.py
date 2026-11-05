@@ -626,6 +626,13 @@ def _fold_prose_scan_fields(
     """
     banned = frozenset(k.lower() for k in forbidden) | _SECRET_KEYS_LOWER
     payload = raw.get("payload")
+    if payload is not None and not isinstance(payload, dict):
+        # Fail closed: never drop a non-dict payload's content (#27 regression).
+        raise IntentValidationError(
+            f"{where}: payload must be an object, got {type(payload).__name__}",
+            errors=[{"type": "dict_type", "loc": ["payload"],
+                     "msg": f"{where}: payload must be an object"}],
+        )
     payload_d: Dict[str, Any] = payload if isinstance(payload, dict) else {}
 
     subject_parts: List[str] = []
@@ -1081,7 +1088,13 @@ def intent_to_govern_dict(intent: Union[GovernIntent, dict, BaseModel]) -> Dict[
         return intent.model_dump(mode="python", exclude_none=True)
     if isinstance(intent, dict):
         parsed = parse_intent(intent)
-        return intent_to_govern_dict(parsed)
+        out = intent_to_govern_dict(parsed)
+        if type(parsed) is GovernIntent:
+            # Generic tool/agent intents: keep every extra top-level key
+            # (cmd, argv, ...) so the policy scan sees the whole intent.
+            for k, v in intent.items():
+                out.setdefault(k, v)
+        return out
     raise IntentValidationError(
         f"unsupported intent type: {type(intent).__name__}",
         errors=[{"msg": f"unsupported intent type: {type(intent).__name__}"}],

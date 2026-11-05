@@ -63,3 +63,13 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 | Engine passed `t=t_before+1` into the latch, so `switch_times` were 1-based while `history_p_hat` was seeded at t=0 and `c_scores` / zeta used 0-based `arange` — same physical step got different `(t+1)^σ` weights (`Z_C` vs `Z_E`/`Z_R`). | Leave `TransistorLatch._t` alone (0-based); do not seed `history_p_hat`; regression asserts `history_p_hat[τ] ==` switched step’s `p_hat`. |
 
 Full map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
+
+## Integrity — tool gate fail-closed (whole-intent scan, non-dict payload, rm flags)
+
+| Bug | Solution |
+|-----|----------|
+| **Tool args unscanned** — generic intents dropped extra top-level keys (`cmd`, `argv`) before policy; JSON escaping hid `\t`/`\n` from `\s`, so `rm\t-rf /`, a second line, or an argv list ALLOWed. | `intent_to_govern_dict` keeps extra top-level keys for generic `GovernIntent`; `PolicyEngine.evaluate` also scans a normalised view of every string leaf (whitespace collapsed, per line + whole, string lists joined as argv). |
+| **Split rm flags** — `rm -r -f /`, `--recursive --force` missed `tool_rm_rf_root`. | `_RM_RF_ANY`: any order/mix of `-r/-R/--recursive` + `-f/--force`, separate or combined. `rm file.txt` / `rm -f build.log` still ALLOW. |
+| **#27 regression** — non-dict `payload` + prose alias (`body`/`summary`/`text`) was silently dropped → ALLOW. | `_fold_prose_scan_fields` raises `IntentValidationError` → BLOCK `GOV_INTENT_INVALID`. |
+| String `payload` crashed `stack._govern_inner` (`AttributeError` on `.get`). | `govern()` BLOCKs any non-dict payload with `GOV_INTENT_INVALID`; difficulty lookup made type-safe. |
+| **Review gaps** — `rm -r /` / `rm -r -I /` ALLOWed; `rm -rf -- /`, `'/'`, `"/"`, `/.` only REVIEWed; zero-width / fullwidth / quote / backslash tricks (`r\u200bm`, `ｒｍ`, `r''m`, `r\\m`) ALLOWed; tuple dict key raised `TypeError`; `rm -rf /home/me/proj/dist` false-positive BLOCK. | Root rule needs only recursive (`_RM_R_ANY`), accepts `--`/`/.`/`..`; scan text is NFKC-folded, Cf-stripped, plus a quote/backslash-stripped shell view (dict keys scanned too); `GovernedTool.check` BLOCKs non-str keys with `GOV_INTENT_INVALID`; root = system dir or one level below (deeper → REVIEW). Also BLOCK `find / … -delete`/`-exec rm -r` and `base64 -d … \| sh`. |

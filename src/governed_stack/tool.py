@@ -48,6 +48,25 @@ def _canonical_intent_json(intent: Dict[str, Any]) -> str:
     return json.dumps(intent, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _non_str_key_path(o: Any, path: str = "intent", depth: int = 0) -> Optional[str]:
+    """Location of the first non-string dict key (tuple, int, ...) or None."""
+    if depth > 64:
+        return path
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if not isinstance(k, str):
+                return f"{path}[{type(k).__name__} key]"
+            hit = _non_str_key_path(v, f"{path}.{k}", depth + 1)
+            if hit:
+                return hit
+    elif isinstance(o, (list, tuple, set, frozenset)):
+        for i, v in enumerate(o):
+            hit = _non_str_key_path(v, f"{path}[{i}]", depth + 1)
+            if hit:
+                return hit
+    return None
+
+
 def intent_sha256(intent: Dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_intent_json(intent).encode("utf-8")).hexdigest()
 
@@ -97,6 +116,15 @@ class GovernedTool:
         if not isinstance(intent, dict):
             raise TypeError("intent must be a dict")
         try:
+            bad_key = _non_str_key_path(intent)
+            if bad_key:
+                # Fail closed: non-string keys can't be canonically hashed or
+                # scanned reliably (json sort_keys raised TypeError).
+                raise IntentValidationError(
+                    f"non-string dict key at {bad_key}",
+                    errors=[{"type": "key_type", "loc": [bad_key],
+                             "msg": "dict keys must be strings"}],
+                )
             parsed = parse_intent(intent)
             govern_intent = (
                 parsed.dump_for_govern()
