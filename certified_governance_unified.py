@@ -441,9 +441,18 @@ class AuditStorage:
     serializes tip read → monotonic timestamp → hash/sign → INSERT → tip update.
     """
 
-    def __init__(self, db_path: str, crypto: CryptoEngine):
+    def __init__(self, db_path: str, crypto: CryptoEngine, anchor_path: Optional[str] = None):
         self.db_path = db_path
         self.crypto = crypto
+        # Truncation guard: a signed head anchor {seq, head_hash} kept in a
+        # sidecar file next to (not inside) the DB, advanced monotonically
+        # after each committed append. See _check_anchor / docs/AUDIT_TRAIL.md.
+        if anchor_path is None and db_path != ":memory:" and not str(db_path).startswith("file:"):
+            anchor_path = str(db_path) + ".anchor"
+        self.anchor_path = anchor_path
+        # Highest seq this process has ever anchored/seen: catches deletion
+        # of the anchor file itself while the process is alive.
+        self._anchor_floor = 0
         self._local = threading.local()
         # Single-writer lock for hash-chain integrity: SQLite WAL allows
         # concurrent readers, but prev_hash → entry_hash linking must be
@@ -517,6 +526,124 @@ class AuditStorage:
         if row:
             self._last_hash = row["entry_hash"]
             self._last_ts = float(row["timestamp"] or 0.0)
+        self._seq = int(cur.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0])
+        self._bootstrap_anchor()
+
+    # ------------------------------------------------------------------
+    # Truncation guard (signed head anchor)
+    # ------------------------------------------------------------------
+    def _anchor_payload(self, seq: int, head_hash: str) -> bytes:
+        return json.dumps(
+            {
+                "v": 1,
+                "db": os.path.basename(str(self.db_path)),
+                "seq": int(seq),
+                "head_hash": head_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
+    def _read_anchor(self) -> Optional[Dict[str, Any]]:
+        """Return the parsed anchor, None if absent; raise ValueError if bad."""
+        if not self.anchor_path or not os.path.exists(self.anchor_path):
+            return None
+        try:
+            with open(self.anchor_path, "r", encoding="utf-8") as fh:
+                doc = json.load(fh)
+            seq = int(doc["seq"])
+            head = str(doc["head_hash"])
+            sig = base64.b64decode(doc["signature"])
+        except Exception as e:
+            raise ValueError(f"unreadable:{type(e).__name__}") from e
+        if doc.get("db") != os.path.basename(str(self.db_path)):
+            raise ValueError("bad_signature")
+        try:
+            ok = self.crypto.verify(self._anchor_payload(seq, head), sig)
+        except Exception:
+            ok = False
+        if not ok:
+            raise ValueError("bad_signature")
+        return {"seq": seq, "head_hash": head}
+
+    def _write_anchor(self, seq: int, head_hash: str) -> None:
+        """Atomically persist a signed anchor; never moves backwards."""
+        if not self.anchor_path:
+            return
+        try:
+            cur = self._read_anchor()
+        except ValueError:
+            # Never overwrite a tampered/unreadable anchor: keep the evidence
+            # so the next decision fails closed.
+            return
+        if cur is None and self._anchor_floor > 0:
+            return  # anchor vanished while running: keep failing closed
+        if cur is not None:
+            if cur["seq"] >= seq:
+                return
+            # Only advance an anchor whose committed head is still in the
+            # chain at the same position. Otherwise a truncated/rolled-back
+            # log could "heal" itself by appending past the old seq.
+            row = self.conn.execute(
+                "SELECT entry_hash FROM audit_log ORDER BY timestamp ASC, rowid ASC "
+                "LIMIT 1 OFFSET ?",
+                (cur["seq"] - 1,),
+            ).fetchone()
+            if row is None or row["entry_hash"] != cur["head_hash"]:
+                return
+        payload = self._anchor_payload(seq, head_hash)
+        doc = {
+            "v": 1,
+            "db": os.path.basename(str(self.db_path)),
+            "seq": int(seq),
+            "head_hash": head_hash,
+            "signature": base64.b64encode(self.crypto.sign(payload)).decode(),
+        }
+        tmp = f"{self.anchor_path}.tmp.{os.getpid()}.{threading.get_ident()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self.anchor_path)
+        self._anchor_floor = max(self._anchor_floor, int(seq))
+
+    def _bootstrap_anchor(self) -> None:
+        """First open of a legacy/new DB with no anchor: anchor the current
+        head if (and only if) the existing chain verifies."""
+        if not self.anchor_path or self._seq == 0:
+            return
+        try:
+            existing = self._read_anchor()
+        except ValueError:
+            return  # tampered: leave it, verify_chain will BLOCK
+        if existing is not None:
+            self._anchor_floor = max(self._anchor_floor, existing["seq"])
+            return
+        try:
+            if self.verify_chain(_check_anchor=False)["valid"]:
+                self._write_anchor(self._seq, self._last_hash)
+        except Exception as e:  # pragma: no cover - best effort
+            logger.warning(f"audit anchor bootstrap failed: {e}")
+
+    def _check_anchor(self, hashes_in_order: List[str]) -> Tuple[bool, str]:
+        """Compare the chain (in verify order) against the signed anchor."""
+        if not self.anchor_path:
+            return True, "anchor:disabled"
+        try:
+            anchor = self._read_anchor()
+        except ValueError as e:
+            return False, f"anchor_{e}"
+        if anchor is None:
+            if self._anchor_floor > 0:
+                return False, "anchor_missing"
+            return True, "anchor:none"
+        self._anchor_floor = max(self._anchor_floor, anchor["seq"])
+        n = len(hashes_in_order)
+        if n < anchor["seq"]:
+            return False, f"truncated:{n}<{anchor['seq']}"
+        if anchor["seq"] > 0 and hashes_in_order[anchor["seq"] - 1] != anchor["head_hash"]:
+            return False, "head_mismatch"
+        return True, "anchor:ok"
 
     def close(self) -> None:
         """Close the thread-local SQLite connection if present and clear it."""
@@ -632,6 +759,13 @@ class AuditStorage:
             self.conn.commit()
             self._last_hash = entry_hash
             self._last_ts = ts
+            self._seq += 1
+            try:
+                self._write_anchor(self._seq, entry_hash)
+            except Exception as e:
+                # The row is durable; a lagging anchor is still sound (it
+                # only guards a shorter prefix), so do not fail the append.
+                logger.warning(f"audit anchor update failed: {e}")
         return entry_id
 
     def enqueue_pending_review(self, entry_id: str) -> bool:
@@ -808,9 +942,11 @@ class AuditStorage:
             "original_intent": original_intent,
         }
 
-    def verify_chain(self) -> Dict[str, Any]:
+    def verify_chain(self, _check_anchor: bool = True) -> Dict[str, Any]:
         """
-        Verify hash chain and signatures over all entries.
+        Verify hash chain and signatures over all entries, then check the
+        chain against the signed head anchor (tail truncation / DB deletion /
+        rollback). ``anchor_ok`` False also makes ``valid`` False.
         """
         cur = self.conn.cursor()
         rows = cur.execute(
@@ -852,11 +988,18 @@ class AuditStorage:
 
         integrity_pressure = (len(broken) / total) if total > 0 else 0.0
 
+        if _check_anchor:
+            anchor_ok, anchor_reason = self._check_anchor([r["entry_hash"] for r in rows])
+        else:
+            anchor_ok, anchor_reason = True, "anchor:skipped"
+
         return {
-            "valid": len(broken) == 0,
+            "valid": len(broken) == 0 and anchor_ok,
             "broken_entries": broken,
             "entries_checked": total,
             "integrity_pressure": integrity_pressure,
+            "anchor_ok": anchor_ok,
+            "anchor_reason": anchor_reason,
         }
 
     def stats(self, hours: int = 24) -> Dict[str, Any]:
@@ -2091,6 +2234,11 @@ class CertifiedGovernanceEngine:
                 }
                 chain_unavailable = True
 
+            # Truncation guard: a chain shorter than (or diverging from) its
+            # signed head anchor is a hard, terminal BLOCK. Not REVIEW, not
+            # cacheable, and no approval voucher can reopen it.
+            audit_truncated = chain_status.get("anchor_ok") is False
+
             integrity_signal = self.signals.integrity_pressure_signal(
                 chain_breaks=len(chain_status["broken_entries"]),
                 total_entries=chain_status["entries_checked"],
@@ -2117,6 +2265,7 @@ class CertifiedGovernanceEngine:
                 cached is not None
                 and not user_rate_exceeded
                 and voucher_claims is None
+                and not audit_truncated
             )
 
             if cache_hit:
@@ -2127,7 +2276,12 @@ class CertifiedGovernanceEngine:
                 # Hard safety gates (circuit open, integrity pressure, user
                 # rate limit) still apply — a voucher is not a blank cheque
                 # to override operational safety.
-                if voucher_claims is not None:
+                if audit_truncated:
+                    final_decision = "BLOCK"
+                    policy_reasons = list(policy_reasons) + [
+                        f"audit_truncation:{chain_status.get('anchor_reason', 'anchor_failed')}"
+                    ]
+                elif voucher_claims is not None:
                     if circuit_state == "OPEN" or user_rate_exceeded:
                         final_decision = "BLOCK"
                     elif integrity_signal > self.config["integrity_block_threshold"]:

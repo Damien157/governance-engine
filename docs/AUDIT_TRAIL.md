@@ -318,3 +318,7 @@ Gate could ALLOW body A while a factory closed over body B on the wire. That mad
 ## Earlier integrity stack
 
 See UNIFIED_USEFUL §3 (FIX 1–10, latch, hosted-check, audit projection). Those entries predate this file; do not duplicate here unless re-reviewed.
+
+## Truncation guard (signed head anchor)
+
+Each per-key `audit.db` has a sidecar `audit.db.anchor`: a signed `{seq, head_hash}` that only moves forward. Before every decision, `verify_chain()` checks the chain against it. If the tail was truncated, the DB was deleted or rolled back, or the anchor was tampered with, `verify_chain()` reports `valid=False, anchor_ok=False`, and the engine returns a terminal **BLOCK** (`audit_truncation:*`). No voucher or cache entry can override it. Limits are listed in `docs/BUGFIXES.md`.

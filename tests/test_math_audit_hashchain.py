@@ -119,14 +119,16 @@ def test_chain_hashes_recompute_independently_and_link(chain):
     ts = [r["timestamp"] for r in rows]
     assert all(b > a for a, b in zip(ts, ts[1:]))  # strictly monotone timestamps
     out = store.verify_chain()
-    assert out == {"valid": True, "broken_entries": [], "entries_checked": 8, "integrity_pressure": 0.0}
+    assert out == {"valid": True, "broken_entries": [], "entries_checked": 8, "integrity_pressure": 0.0,
+                   "anchor_ok": True, "anchor_reason": "anchor:ok"}
 
 
 def test_empty_chain_is_valid_with_zero_pressure(crypto):
     with tempfile.TemporaryDirectory() as d:
         s = cg.AuditStorage(str(Path(d) / "e.db"), crypto)
         assert s.verify_chain() == {"valid": True, "broken_entries": [], "entries_checked": 0,
-                                    "integrity_pressure": 0.0}
+                                    "integrity_pressure": 0.0, "anchor_ok": True,
+                                    "anchor_reason": "anchor:none"}
         s.close()
 
 
@@ -228,14 +230,14 @@ def test_swapping_two_rows_timestamps_is_detected(chain):
     assert not store.verify_chain()["valid"]
 
 
-def test_tail_truncation_is_NOT_detectable_known_limitation(chain):
-    """Pins current behaviour (documented limitation, not a regression gate): a pure hash chain with no external
-    anchor cannot prove nothing was dropped from the *end*. If an anchor/length commitment is ever added this
-    test should be updated to expect detection."""
+def test_tail_truncation_is_detected_by_head_anchor(chain):
+    """A pure hash chain cannot see a dropped tail (every link still checks: broken_entries == []); the signed
+    head anchor {seq, head_hash} (AuditStorage.anchor_path) is what detects it. See tests/test_audit_truncation_guard.py."""
     path, store, ids = chain
     _sql(path, "DELETE FROM audit_log WHERE id = ?", (ids[-1],))
     out = store.verify_chain()
-    assert out["valid"] is True and out["entries_checked"] == 7
+    assert out["broken_entries"] == [] and out["entries_checked"] == 7
+    assert out["anchor_ok"] is False and out["valid"] is False
 
 
 def test_tip_is_restored_from_db_so_chain_continues_after_reopen(crypto):
