@@ -115,6 +115,7 @@ class TestAuditSoak(unittest.TestCase):
 
             errors: List[str] = []
             results: List[Tuple[str, Optional[str]]] = []
+            finals: List[str] = []
             lock = threading.Lock()
 
             def worker(tid: int) -> None:
@@ -147,6 +148,8 @@ class TestAuditSoak(unittest.TestCase):
                             raise AssertionError(f"bad decision: {decision!r}")
                         with lock:
                             results.append((str(decision), env.get("entry_id")))
+                            if (env.get("audit") or {}).get("final_entry_id"):
+                                finals.append(env["audit"]["final_entry_id"])
                 except Exception as exc:  # noqa: BLE001 — collect for main thread
                     with lock:
                         errors.append(f"thread-{tid}: {type(exc).__name__}: {exc}")
@@ -184,11 +187,24 @@ class TestAuditSoak(unittest.TestCase):
             verify = stack.engine.storage.verify_chain()
             self.assertTrue(verify.get("valid"), msg=repr(verify))
             self.assertEqual(verify.get("broken_entries"), [])
-            # Unique intents → one audit row per call (cache_ttl=0 + nonces).
+            # Unique intents → one audit row per call (cache_ttl=0 + nonces),
+            # plus one linked stack_final row per call the stack tightened.
+            # Count from the DB: some wrappers (e.g. mail) return their own
+            # envelope, so the stack_final id is not always surfaced.
+            _cur = stack.engine.storage.conn.cursor()
+            _cur.execute("SELECT COUNT(*) FROM audit_log WHERE result = 'stack_tightened'")
+            n_final = int(_cur.fetchone()[0])
+            self.assertGreaterEqual(n_final, len(finals))
+            _cur.execute(
+                "SELECT COUNT(*) FROM audit_log f WHERE f.result = 'stack_tightened' AND NOT EXISTS "
+                "(SELECT 1 FROM audit_log o WHERE o.id = json_extract(f.metadata, '$.overrides_entry_id'))"
+            )
+            self.assertEqual(_cur.fetchone()[0], 0, "stack_final row with no parent entry")
+            expected_rows = TOTAL_CALLS + n_final
             self.assertEqual(
                 verify.get("entries_checked"),
-                TOTAL_CALLS,
-                msg=f"audit entries {verify.get('entries_checked')} != {TOTAL_CALLS}",
+                expected_rows,
+                msg=f"audit entries {verify.get('entries_checked')} != {expected_rows}",
             )
 
             # Checkpoint WAL then close main-thread connection before tempdir rm.
