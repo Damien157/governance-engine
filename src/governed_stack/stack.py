@@ -317,7 +317,7 @@ class GovernedStack:
             if decision == "ALLOW":
                 notes.append(
                     "hais_capability_cap override: CGE logged ALLOW; "
-                    "stack overrides decision to BLOCK without a second audit write"
+                    "stack overrides decision to BLOCK; final decision appended as a linked audit entry"
                 )
             decision = "BLOCK"
             if "hais_capability_cap" not in reasons:
@@ -385,9 +385,8 @@ class GovernedStack:
             # (tighten-only: ALLOW/REVIEW -> BLOCK; never loosened, and it runs after
             # the ops layer so an approval voucher cannot reopen it). The ops
             # layer (CGE) has already written its audit entry with the
-            # pre-solver decision; like the HAIS cap override above, this
-            # tightening is recorded in the envelope (reasons/notes/
-            # audit.qp_tightened), not as a second audit write.
+            # pre-solver decision; the final decision is appended below as a
+            # linked "stack_final" audit entry (audit.final_entry_id).
             qp_reason = self._qp_failure_reason(solver)
             if qp_reason is not None:
                 if qp_reason not in reasons:
@@ -396,11 +395,46 @@ class GovernedStack:
                 if tightened != decision:
                     notes.append(
                         f"{qp_reason}: stack tightens {decision} -> {tightened} "
-                        "after control step; CGE audit entry holds the pre-solver "
-                        "decision (no second audit write)"
+                        "after control step; final decision appended as a linked "
+                        "audit entry"
                     )
                     qp_tightened = {"from": decision, "to": tightened, "reason": qp_reason}
                 decision = tightened
+
+        # Record the final decision in the signed audit chain whenever the
+        # stack tightened what the ops layer logged (HAIS cap, latch, QP).
+        # The original row is never edited: a linked "stack_final" entry is
+        # appended to the same hash chain (and advances the truncation
+        # anchor). Tighten-only: we only ever append a stricter decision.
+        # If this write fails the decision stays (or becomes) BLOCK.
+        ops_decision = result.get("decision")
+        final_entry_id: Optional[str] = None
+        final_write_error: Optional[str] = None
+        if entry_id and ops_decision and decision != ops_decision:
+            try:
+                final_entry_id = self.engine.storage.log_decision(
+                    intent={"stack_final_for": entry_id},
+                    decision=decision,
+                    result="stack_tightened",
+                    verification_score=0.3,
+                    risk_signal=risk_signal,
+                    anomaly_signal=0.0,
+                    policy_reasons=list(reasons),
+                    metadata={
+                        "overrides_entry_id": entry_id,
+                        "from": ops_decision,
+                        "to": decision,
+                        **({"qp_tightened": qp_tightened} if qp_tightened else {}),
+                    },
+                    engine_version="GovernedStack final-decision",
+                    enqueue_review=False,
+                )
+            except Exception as exc:
+                final_write_error = f"{type(exc).__name__}: {exc}"
+                notes.append(f"audit_final_write_failed:{exc}")
+                if "audit_final_write_failed" not in reasons:
+                    reasons.append("audit_final_write_failed")
+                decision = self._tighten(decision, "BLOCK")
 
         code = map_error_code(decision=decision, reasons=reasons, notes=notes)
         return self._envelope(
@@ -424,6 +458,8 @@ class GovernedStack:
                 "risk_signal": risk_signal,
                 "attestations": ops.get("attestations"),
                 **({"qp_tightened": qp_tightened} if qp_tightened else {}),
+                **({"final_entry_id": final_entry_id} if final_entry_id else {}),
+                **({"final_write_error": final_write_error} if final_write_error else {}),
             },
             notes=notes or None,
             error_code=code,

@@ -8,6 +8,30 @@ Verification labels match [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md):
 
 ---
 
+## Status snapshot (2026-11-07)
+
+Merged to `main` (at `43712f9` before this PR), CI green on Python 3.12 and 3.13:
+
+- **#31** `fix/stack-qp-status`: QP failure, non-ok status (including degraded `cbf_only_after:*` solves) or solver error tightens ALLOW to **BLOCK**; voucher cannot reopen.
+- **#34** `test/qp-block-cvxopt-followup`: real-CVXOPT end-to-end tests and docs carried over from #32 (closed as duplicate).
+- **#33** `fix/tool-gate-fail-closed`: tool gate fails closed (root `rm -r` variants, Unicode/quoting tricks, `find / -delete`, base64-to-shell, non-string keys).
+- **#35** `fix/audit-truncation-guard`: signed forward-only anchor; truncation, rollback or deletion gives terminal **BLOCK**.
+
+Older sections below marked "PR open" predate these merges.
+
+Open items: 3DM solver errors do not yet feed back into the decision; hardened `cdcl.c` pending source files.
+
+## fix/audit-final-decision — audit chain records the final decision (**Reported**, PR open)
+
+The ops layer logs before the HAIS cap, latch and control QP run. When the stack tightens that decision, `GovernedStack` now appends a linked `stack_final` entry (`result=stack_tightened`, `metadata.overrides_entry_id`, `from`, `to`) to the same signed chain, advancing the truncation anchor and never entering the review queue. The original row is untouched. A failed final write forces **BLOCK** (`audit_final_write_failed`). Tests: `tests/test_audit_final_decision.py`.
+
+### Accepted residuals
+
+- Auditors must join on `overrides_entry_id`; the first row alone still shows the ops-layer decision.
+- Only tightening is recorded (the stack never loosens), so final == ops decision produces no extra row.
+
+---
+
 ## test/all-works — one-command runner + default tool-gate hardening (**Reported**, PR open)
 
 | Field | Value |
