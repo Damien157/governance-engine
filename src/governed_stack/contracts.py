@@ -1171,7 +1171,7 @@ def map_error_code(
         ):
             return GOV_POLICY_BLOCK
         # Opaque ops failures / failed control (QP) step — internal, not policy.
-        if any(r.startswith(("ops_error:", "qp_solver_error", "qp_not_feasible:")) for r in rs):
+        if any(r.startswith(("ops_error:", "qp_solver_error", "qp_not_feasible:", "3dm_solver_error", "3dm_result_invalid:")) for r in rs):
             return GOV_INTERNAL
         # Unknown BLOCK reasons: omit rather than invent.
         _ = joined
