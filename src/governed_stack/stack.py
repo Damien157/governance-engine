@@ -373,6 +373,22 @@ class GovernedStack:
             except Exception as exc:
                 notes.append(f"3dm_solver_error:{exc}")
                 solver = {"kind": "3dm", "error": str(exc)}
+            # Same tighten-only feedback as the control step (#31): a crashed
+            # or malformed 3DM run turns the decision into BLOCK, never
+            # REVIEW, after the ops layer so a voucher cannot reopen it.
+            # Recorded as audit.qp_tightened (solver tightening, any kind).
+            dm_reason = self._3dm_failure_reason(solver)
+            if dm_reason is not None:
+                if dm_reason not in reasons:
+                    reasons.append(dm_reason)
+                tightened = self._tighten(decision, "BLOCK")
+                if tightened != decision:
+                    notes.append(
+                        f"{dm_reason}: stack tightens {decision} -> {tightened} "
+                        "after 3dm step"
+                    )
+                    qp_tightened = {"from": decision, "to": tightened, "reason": dm_reason}
+                decision = tightened
 
         # ---- e) CLF-CBF-QP one step ----------------------------------------
         if solver_ok and action == "control":
@@ -512,6 +528,36 @@ class GovernedStack:
             or status not in cls._QP_OK_STATUSES
         ):
             return f"qp_not_feasible:{status}"
+        return None
+
+    _3DM_REQUIRED = ("instance", "abs_S", "abs_L", "matching_key", "hit_imprint_reversed", "in_L")
+
+    @classmethod
+    def _3dm_failure_reason(cls, solver: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Reason string if a 3DM solver result is not a usable run.
+
+        Fails closed on an exception, a missing field, a non-finite or
+        out-of-range hit probability, or non-integer/negative set sizes.
+        A legitimate sampler miss (``in_L`` False) is a result, not a failure.
+        """
+        import math
+
+        if not solver or solver.get("kind") != "3dm":
+            return None
+        if "error" in solver:
+            return "3dm_solver_error"
+        missing = [k for k in cls._3DM_REQUIRED if k not in solver]
+        if missing:
+            return f"3dm_result_invalid:missing:{','.join(missing)}"
+        hit = solver.get("hit_imprint_reversed")
+        if isinstance(hit, bool) or not isinstance(hit, (int, float)) or not math.isfinite(hit) or not 0.0 <= hit <= 1.0:
+            return "3dm_result_invalid:hit_imprint_reversed"
+        for k in ("abs_S", "abs_L"):
+            v = solver.get(k)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                return f"3dm_result_invalid:{k}"
+        if not isinstance(solver.get("in_L"), bool):
+            return "3dm_result_invalid:in_L"
         return None
 
     # ------------------------------------------------------------------
