@@ -23,7 +23,9 @@ Open items: 3DM solver errors do not yet feed back into the decision; hardened `
 
 ## fix/audit-final-decision — audit chain records the final decision (**Reported**, PR open)
 
-The ops layer logs before the HAIS cap, latch and control QP run. When the stack tightens that decision, `GovernedStack` now appends a linked `stack_final` entry (`result=stack_tightened`, `metadata.overrides_entry_id`, `from`, `to`) to the same signed chain, advancing the truncation anchor and never entering the review queue. The original row is untouched. A failed final write forces **BLOCK** (`audit_final_write_failed`). Tests: `tests/test_audit_final_decision.py`.
+The ops layer logs before the HAIS cap, latch and control QP run. When the stack tightens that decision, `GovernedStack` now appends a linked `stack_final` entry (`result=stack_tightened`, `metadata.overrides_entry_id`, `from`, `to`) to the same signed chain, advancing the truncation anchor and never entering the review queue. The original row is untouched. A failed final write forces **BLOCK** (`audit_final_write_failed`).
+
+**Signed link (review follow-up).** The `metadata` and `policy_reasons` columns are not covered by the entry hash, so the link lives in the signed intent: `overrides_entry_id`, `overrides_entry_hash` (the overridden row's `entry_hash`), `from`, `to`, `reasons`, `qp_tightened`. `metadata` only mirrors it. `prev_hash` is the chain tip at write time, which can be another writer's row; `overrides_entry_hash` binds the exact original regardless. If the original row cannot be found, the decision is **BLOCK** and nothing is appended. Known limit: a failed final write is surfaced in the envelope (`audit.final_write_error`) but leaves no audit row of its own. Tests: `tests/test_audit_final_decision.py` (incl. tamper, interleaved writer, missing original).
 
 ### Accepted residuals
 

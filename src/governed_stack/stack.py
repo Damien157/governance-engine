@@ -403,29 +403,44 @@ class GovernedStack:
 
         # Record the final decision in the signed audit chain whenever the
         # stack tightened what the ops layer logged (HAIS cap, latch, QP).
-        # The original row is never edited: a linked "stack_final" entry is
-        # appended to the same hash chain (and advances the truncation
+        # The original row is never edited: a linked "stack_tightened" entry
+        # is appended to the same hash chain (and advances the truncation
         # anchor). Tighten-only: we only ever append a stricter decision.
-        # If this write fails the decision stays (or becomes) BLOCK.
+        #
+        # Everything that explains the override goes in the *intent*, which
+        # is inside the hashed + signed body: the overridden entry id AND its
+        # entry_hash (so the link survives concurrent writers landing between
+        # the two rows), from/to, reasons and qp_tightened. ``metadata`` and
+        # ``policy_reasons`` columns are NOT covered by the entry hash, so
+        # they only mirror the signed intent for convenience.
+        # If the lookup or the write fails the decision stays (or becomes)
+        # BLOCK.
         ops_decision = result.get("decision")
         final_entry_id: Optional[str] = None
         final_write_error: Optional[str] = None
         if entry_id and ops_decision and decision != ops_decision:
             try:
+                overridden_hash = self.engine.storage.entry_hash_of(entry_id)
+                if not overridden_hash:
+                    raise LookupError(f"overridden entry {entry_id} not found in audit_log")
+                link = {
+                    "stack_final_for": entry_id,
+                    "overrides_entry_id": entry_id,
+                    "overrides_entry_hash": overridden_hash,
+                    "from": ops_decision,
+                    "to": decision,
+                    "reasons": list(reasons),
+                    **({"qp_tightened": qp_tightened} if qp_tightened else {}),
+                }
                 final_entry_id = self.engine.storage.log_decision(
-                    intent={"stack_final_for": entry_id},
+                    intent=link,
                     decision=decision,
                     result="stack_tightened",
                     verification_score=0.3,
                     risk_signal=risk_signal,
                     anomaly_signal=0.0,
                     policy_reasons=list(reasons),
-                    metadata={
-                        "overrides_entry_id": entry_id,
-                        "from": ops_decision,
-                        "to": decision,
-                        **({"qp_tightened": qp_tightened} if qp_tightened else {}),
-                    },
+                    metadata={k: v for k, v in link.items() if k != "stack_final_for"},
                     engine_version="GovernedStack final-decision",
                     enqueue_review=False,
                 )

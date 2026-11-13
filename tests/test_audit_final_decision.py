@@ -151,6 +151,74 @@ class TestAuditFinalDecision(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(st._read_anchor()["seq"], 2)
         self.assertTrue(st.verify_chain()["valid"])
 
+    def signed_intent(self, s, entry_id):
+        import base64
+        cur = s.engine.storage.conn.cursor()
+        cur.execute("SELECT intent_envelope FROM audit_log WHERE id = ?", (entry_id,))
+        env = json.loads(cur.fetchone()[0])
+        return json.loads(base64.b64decode(env["data"]))
+
+    def entry_hash(self, s, entry_id):
+        cur = s.engine.storage.conn.cursor()
+        cur.execute("SELECT entry_hash FROM audit_log WHERE id = ?", (entry_id,))
+        return cur.fetchone()[0]
+
+    async def test_link_fields_are_in_signed_intent(self):
+        s = self.make_stack()
+        self.degrade(s)
+        env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+        link = self.signed_intent(s, env["audit"]["final_entry_id"])
+        self.assertEqual(link["overrides_entry_id"], env["entry_id"])
+        self.assertEqual(link["overrides_entry_hash"], self.entry_hash(s, env["entry_id"]))
+        self.assertEqual((link["from"], link["to"]), ("ALLOW", "BLOCK"))
+        self.assertIn("qp_not_feasible:cbf_only_after:unknown", link["reasons"])
+        self.assertEqual(link["qp_tightened"]["reason"], "qp_not_feasible:cbf_only_after:unknown")
+
+    async def test_tampering_link_breaks_chain(self):
+        import base64
+        s = self.make_stack()
+        self.degrade(s)
+        env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+        fid = env["audit"]["final_entry_id"]
+        link = self.signed_intent(s, fid)
+        link["to"] = "ALLOW"
+        forged = json.dumps({"data": base64.b64encode(json.dumps(link).encode()).decode()})
+        st = s.engine.storage
+        st.conn.execute("UPDATE audit_log SET intent_envelope = ? WHERE id = ?", (forged, fid))
+        st.conn.commit()
+        self.assertFalse(st.verify_chain()["valid"])
+
+    async def test_link_survives_interleaved_writer(self):
+        s = self.make_stack()
+        self.degrade(s)
+        st = s.engine.storage
+        real_qp = s._run_qp_step
+
+        def qp_with_interleave(intent):
+            # Another writer lands between the ops row and the final row.
+            st.log_decision(intent={"other": 1}, decision="ALLOW", result="other",
+                            verification_score=0.9, risk_signal=0.0, anomaly_signal=0.0,
+                            policy_reasons=[], enqueue_review=False)
+            return real_qp(intent)
+
+        s._run_qp_step = qp_with_interleave
+        env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+        rows = self.rows(s)
+        self.assertEqual(len(rows), 3)
+        link = self.signed_intent(s, env["audit"]["final_entry_id"])
+        # prev_hash points at the interleaved row; the signed link still binds the original.
+        self.assertEqual(link["overrides_entry_hash"], self.entry_hash(s, env["entry_id"]))
+        self.assertTrue(st.verify_chain()["valid"])
+
+    async def test_missing_overridden_entry_fails_closed(self):
+        s = self.make_stack()
+        self.degrade(s)
+        s.engine.storage.entry_hash_of = lambda _eid: None
+        env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+        self.assertEqual(env["decision"], "BLOCK")
+        self.assertIn("audit_final_write_failed", env["reasons"])
+        self.assertEqual(len(self.rows(s)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

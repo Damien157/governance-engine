@@ -663,6 +663,18 @@ class AuditStorage:
         except Exception:
             pass
 
+    def entry_hash_of(self, entry_id: str) -> Optional[str]:
+        """Return the stored ``entry_hash`` for ``entry_id`` (None if absent).
+
+        Read-only. Used by the stack to bind a linked final-decision entry to
+        the exact row it overrides, inside the signed intent.
+        """
+        with self._chain_lock:
+            row = self.conn.execute(
+                "SELECT entry_hash FROM audit_log WHERE id = ?", (entry_id,)
+            ).fetchone()
+        return row["entry_hash"] if row is not None else None
+
     def log_decision(
         self,
         intent: Dict[str, Any],
