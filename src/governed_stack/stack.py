@@ -6,7 +6,11 @@ Does not rewrite HAIS / Haven2 / imprint / CLF-CBF-QP internals; only wires them
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -100,6 +104,9 @@ class GovernedStack:
         self._plant = None
         self._imprint_ready = False
         self.metrics = DecisionMetrics()
+        # Last-resort sink for a final-decision audit write that could not
+        # reach the hash chain at all (see _record_final_write_failure).
+        self._fallback_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Lazy solvers
@@ -418,7 +425,9 @@ class GovernedStack:
         ops_decision = result.get("decision")
         final_entry_id: Optional[str] = None
         final_write_error: Optional[str] = None
+        final_write_trace: Optional[Dict[str, Any]] = None
         if entry_id and ops_decision and decision != ops_decision:
+            overridden_hash: Optional[str] = None
             try:
                 overridden_hash = self.engine.storage.entry_hash_of(entry_id)
                 if not overridden_hash:
@@ -450,6 +459,22 @@ class GovernedStack:
                 if "audit_final_write_failed" not in reasons:
                     reasons.append("audit_final_write_failed")
                 decision = self._tighten(decision, "BLOCK")
+                # Leave a trace of the failure itself: a minimal signed row
+                # in the chain, else a hashed line in the fallback file.
+                # Never raises; the decision is BLOCK either way.
+                final_write_trace = self._record_final_write_failure(
+                    entry_id=entry_id,
+                    overridden_hash=overridden_hash,
+                    ops_decision=ops_decision,
+                    decision=decision,
+                    reasons=list(reasons),
+                    exc=exc,
+                    risk_signal=risk_signal,
+                )
+                if final_write_trace.get("fallback_error"):
+                    notes.append(
+                        f"audit_final_trace_lost:{final_write_trace['fallback_error']}"
+                    )
 
         code = map_error_code(decision=decision, reasons=reasons, notes=notes)
         return self._envelope(
@@ -475,10 +500,161 @@ class GovernedStack:
                 **({"qp_tightened": qp_tightened} if qp_tightened else {}),
                 **({"final_entry_id": final_entry_id} if final_entry_id else {}),
                 **({"final_write_error": final_write_error} if final_write_error else {}),
+                **({"final_write_trace": final_write_trace} if final_write_trace else {}),
             },
             notes=notes or None,
             error_code=code,
         )
+
+    # ------------------------------------------------------------------
+    # Final-decision audit failure trace
+    # ------------------------------------------------------------------
+
+    FALLBACK_GENESIS = "0" * 64
+
+    def _fallback_path(self) -> Optional[str]:
+        """Path of the append-only fallback file (None if none can be derived).
+
+        ``config["audit_fallback_path"]`` wins; otherwise it sits next to a
+        file-backed audit DB as ``<db>.final_write_failures.jsonl``.
+        """
+        p = self.config.get("audit_fallback_path")
+        if p:
+            return str(p)
+        db = str(getattr(self.engine.storage, "db_path", "") or "")
+        if not db or db == ":memory:" or db.startswith("file:"):
+            return None
+        return db + ".final_write_failures.jsonl"
+
+    def _record_final_write_failure(
+        self,
+        *,
+        entry_id: str,
+        overridden_hash: Optional[str],
+        ops_decision: str,
+        decision: str,
+        reasons: list,
+        exc: BaseException,
+        risk_signal: Any,
+    ) -> Dict[str, Any]:
+        """Leave a durable trace when the linked final-decision write failed.
+
+        1. One minimal BLOCK row (``result=stack_final_write_failed``) via
+           ``log_decision``; the failure facts sit in the signed intent.
+        2. If that also fails: one JSON line appended (O_APPEND + fsync) to
+           the fallback file, carrying its own sha256, the previous line's
+           sha256 and the last known chain tip / seq.
+
+        Never raises and never changes the decision (the caller has already
+        tightened to BLOCK).
+        """
+        storage = self.engine.storage
+        # A failed commit can leave this thread's connection mid-transaction
+        # with the half-written row; roll it back so the trace row does not
+        # commit it alongside (it would carry a stale prev_hash).
+        try:
+            storage.conn.rollback()
+        except Exception:
+            pass
+        facts: Dict[str, Any] = {
+            "stack_final_write_failed_for": entry_id,
+            **({"overrides_entry_hash": overridden_hash} if overridden_hash else {}),
+            "from": ops_decision,
+            "to": decision,
+            "error_class": type(exc).__name__,
+        }
+        trace: Dict[str, Any] = {"kind": None}
+        try:
+            trace_id = storage.log_decision(
+                intent=facts,
+                decision="BLOCK",
+                result="stack_final_write_failed",
+                verification_score=0.0,
+                risk_signal=risk_signal,
+                anomaly_signal=0.0,
+                policy_reasons=list(reasons),
+                metadata=dict(facts),
+                engine_version="GovernedStack final-write-failure",
+                enqueue_review=False,
+            )
+            return {"kind": "audit_row", "entry_id": trace_id}
+        except Exception as trace_exc:
+            trace["trace_row_error"] = f"{type(trace_exc).__name__}: {trace_exc}"
+            try:
+                storage.conn.rollback()
+            except Exception:
+                pass
+
+        path = self._fallback_path()
+        record = {
+            "ts": time.time(),
+            "event": "stack_final_write_failed",
+            **facts,
+            "reasons": list(reasons),
+            "primary_error": f"{type(exc).__name__}: {exc}",
+            "trace_row_error": trace["trace_row_error"],
+            "chain_tip": getattr(storage, "_last_hash", None),
+            "chain_seq": getattr(storage, "_seq", None),
+        }
+        try:
+            if not path:
+                raise RuntimeError("no audit_fallback_path configured for a non-file audit DB")
+            with self._fallback_lock:
+                record["prev_sha256"] = self._last_fallback_sha(path)
+                canon = json.dumps(record, sort_keys=True, default=str)
+                digest = hashlib.sha256(canon.encode()).hexdigest()
+                line = json.dumps({"record": record, "sha256": digest}, sort_keys=True, default=str) + "\n"
+                fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+                try:
+                    os.write(fd, line.encode())
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+            trace.update(kind="fallback_file", path=path, sha256=digest,
+                         chain_tip=record["chain_tip"])
+        except Exception as fb_exc:
+            trace["kind"] = "lost"
+            trace["fallback_error"] = f"{type(fb_exc).__name__}: {fb_exc}"
+            trace["record"] = record
+        structured_log("audit_final_write_failed", entry_id=entry_id, trace=trace)
+        return trace
+
+    @classmethod
+    def _last_fallback_sha(cls, path: str) -> str:
+        """sha256 of the last line in the fallback file (genesis if none)."""
+        if not os.path.exists(path):
+            return cls.FALLBACK_GENESIS
+        last = None
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                if raw.strip():
+                    last = raw
+        if last is None:
+            return cls.FALLBACK_GENESIS
+        return json.loads(last)["sha256"]
+
+    @classmethod
+    def verify_fallback_file(cls, path: str) -> Dict[str, Any]:
+        """Check every fallback line's sha256 and its prev_sha256 link."""
+        prev = cls.FALLBACK_GENESIS
+        n = 0
+        with open(path, "r", encoding="utf-8") as fh:
+            for i, raw in enumerate(fh, 1):
+                if not raw.strip():
+                    continue
+                try:
+                    doc = json.loads(raw)
+                    rec, digest = doc["record"], doc["sha256"]
+                except Exception as e:
+                    return {"valid": False, "line": i, "error": f"unparseable: {e}"}
+                canon = json.dumps(rec, sort_keys=True, default=str)
+                if hashlib.sha256(canon.encode()).hexdigest() != digest:
+                    return {"valid": False, "line": i, "error": "sha256 mismatch"}
+                if rec.get("prev_sha256") != prev:
+                    return {"valid": False, "line": i, "error": "prev_sha256 mismatch"}
+                prev = digest
+                n += 1
+        return {"valid": True, "records": n}
 
     # ------------------------------------------------------------------
     # Solvers
