@@ -68,6 +68,7 @@ Limits:
 - A v1 writer (an old binary) appending to a migrated DB after the cutover produces rows that fail verification. This is deliberate (tighten-only): all writers must be upgraded together.
 - A broken row still feeds `integrity_pressure` as before (it is not a terminal BLOCK on its own like `audit_truncation:*`); that existing engine behaviour is unchanged here.
 - Anyone holding the signing key can forge rows and the cutover record, as before.
+- The cutover boundary is a guard against old-format writers, not against key theft. Tail deletion is not detected by v2 hashing or the cutover; that is the #35 head anchor's job, within its own limits (above).
 
 ## Residual known issues
 
