@@ -56,6 +56,19 @@ Full useful map: [UNIFIED_USEFUL.md](UNIFIED_USEFUL.md).
 - The anchor binds the DB file's basename (`audit.db`), not its full path. Anchors for different keys are told apart by living next to their own DB. Copying another key's anchor that uses the same signing key and has a matching prefix is not detected.
 - Recovery after a real incident is a deliberate operator step: restore the correct DB, or remove the anchor after investigating. Until then the guard keeps blocking.
 
+## Audit rows: metadata and policy_reasons hashed and signed (hash body v2)
+
+| Bug | Solution |
+|-----|----------|
+| The audit hash chain and RSA-PSS signature covered `{id, ts, decision, result, envelope, prev_hash, engine_version, environment_id}` only. The `metadata` and `policy_reasons` columns were outside the hash, so anyone with write access to `audit.db` could rewrite why a decision was made (reasons such as `pii:*`, `human_review:approved_via_voucher:*`, `qp_not_feasible:*`, and override links in metadata) and `verify_chain()` still passed. | New column `audit_log.hash_schema` (`INTEGER NOT NULL DEFAULT 1`; existing DBs get it with `ALTER TABLE`, so every legacy row is v1). Every new row is written as **v2**: `metadata` and `policy_reasons` are stored as canonical JSON (`sort_keys`, separators `,` `:`; `None` → `{}` / `[]`), and the hashed + signed body adds `hash_schema: 2` plus the exact stored text of both columns. The version is **never inferred from the row's content**. It is bound twice: (1) `hash_schema: 2` is inside the signed v2 body, so a v2 row relabelled 1 recomputes a different hash and its signature fails; (2) a signed cutover record (`audit_meta.hash_schema_cutover = {first_v2_id}`, written in the same transaction as the first v2 row) fixes positions: rows before it must be v1, it and every later row must be v2. An unknown or NULL `hash_schema`, a v2 row with a NULL metadata/policy_reasons, a missing/forged/moved cutover record while v2 rows exist, or a row whose version disagrees with the boundary are all marked broken (`valid=False`). The truncation anchor needs no change: it signs `head_hash`, which for v2 rows already covers both columns. Tests: `tests/test_audit_sign_metadata.py`. |
+
+Limits:
+- Legacy v1 rows (written before this change) stay unsigned for `metadata` / `policy_reasons`. Re-signing history would rewrite the chain; they are left as they were.
+- `verification_score`, `risk_signal`, `anomaly_signal` and `trace_id` are still outside the hash (follow-up: hash body v3).
+- A v1 writer (an old binary) appending to a migrated DB after the cutover produces rows that fail verification. This is deliberate (tighten-only): all writers must be upgraded together.
+- A broken row still feeds `integrity_pressure` as before (it is not a terminal BLOCK on its own like `audit_truncation:*`); that existing engine behaviour is unchanged here.
+- Anyone holding the signing key can forge rows and the cutover record, as before.
+
 ## Residual known issues
 
 - `adaptive_re_update_unclamped` remains available and can overshoot by design (opt-in regression).
