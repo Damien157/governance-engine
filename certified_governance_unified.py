@@ -98,8 +98,15 @@ AUDIT_HASH_SCHEMAS = (1, 2)
 
 
 def _audit_c14n(obj: Any) -> str:
-    """Canonical JSON for signed audit columns (sorted keys, no whitespace)."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    """Canonical JSON for signed audit columns (sorted keys, no whitespace).
+
+    ``allow_nan=False``: NaN / Infinity are not JSON, so a non-finite float in
+    metadata or policy_reasons raises ValueError here instead of being stored
+    and signed as nonstandard text. log_decision lets that ValueError
+    propagate before any SQL runs; execute_governed_action catches audit-write
+    failures and fails closed to BLOCK (reason ``audit_log_unavailable``).
+    """
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _audit_hash_body(row: Dict[str, Any], schema: Any) -> bytes:
@@ -1134,9 +1141,12 @@ class AuditStorage:
                     },
                     schema,
                 )
-            except ValueError:
-                # Unknown/NULL hash_schema or a v2 row with a NULL
-                # metadata/policy_reasons column: unverifiable = broken.
+            except (ValueError, KeyError, TypeError):
+                # Unknown/NULL hash_schema, a v2 row with a NULL
+                # metadata/policy_reasons column, or any other malformed
+                # field: this row is unverifiable = broken. Record it and
+                # keep going, so every bad row is reported, not just the
+                # first one.
                 body = None
             if body is None:
                 hash_ok = sig_ok = False
