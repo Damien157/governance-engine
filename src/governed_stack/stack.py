@@ -6,10 +6,20 @@ Does not rewrite HAIS / Haven2 / imprint / CLF-CBF-QP internals; only wires them
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+_fcntl: Any
+try:  # POSIX: cross-process lock for the audit fallback file
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX: thread lock only
+    _fcntl = None
 
 # ---------------------------------------------------------------------------
 # Import path bootstrap (repo layout is multi-root)
@@ -100,6 +110,11 @@ class GovernedStack:
         self._plant = None
         self._imprint_ready = False
         self.metrics = DecisionMetrics()
+        # Last-resort sink for a final-decision audit write that could not
+        # reach the hash chain at all (see _record_final_write_failure).
+        # Process-wide thread lock; cross-process safety is an flock on the
+        # file itself (see _append_fallback_record).
+        self._fallback_lock = GovernedStack._FALLBACK_THREAD_LOCK
 
     # ------------------------------------------------------------------
     # Lazy solvers
@@ -418,7 +433,9 @@ class GovernedStack:
         ops_decision = result.get("decision")
         final_entry_id: Optional[str] = None
         final_write_error: Optional[str] = None
+        final_write_trace: Optional[Dict[str, Any]] = None
         if entry_id and ops_decision and decision != ops_decision:
+            overridden_hash: Optional[str] = None
             try:
                 overridden_hash = self.engine.storage.entry_hash_of(entry_id)
                 if not overridden_hash:
@@ -450,6 +467,23 @@ class GovernedStack:
                 if "audit_final_write_failed" not in reasons:
                     reasons.append("audit_final_write_failed")
                 decision = self._tighten(decision, "BLOCK")
+                # Leave a trace of the failure itself: a minimal signed row
+                # in the chain, else a hashed line in the fallback file.
+                # Never raises; the decision is BLOCK either way.
+                final_write_trace = self._record_final_write_failure(
+                    entry_id=entry_id,
+                    overridden_hash=overridden_hash,
+                    ops_decision=ops_decision,
+                    decision=decision,
+                    reasons=list(reasons),
+                    exc=exc,
+                    risk_signal=risk_signal,
+                )
+                if final_write_trace.get("fallback_error"):
+                    fe = final_write_trace["fallback_error"]
+                    notes.append(
+                        f"audit_final_trace_lost:{fe['error_class']}:{fe['error_sha256'][:16]}"
+                    )
 
         code = map_error_code(decision=decision, reasons=reasons, notes=notes)
         return self._envelope(
@@ -475,10 +509,332 @@ class GovernedStack:
                 **({"qp_tightened": qp_tightened} if qp_tightened else {}),
                 **({"final_entry_id": final_entry_id} if final_entry_id else {}),
                 **({"final_write_error": final_write_error} if final_write_error else {}),
+                **({"final_write_trace": final_write_trace} if final_write_trace else {}),
             },
             notes=notes or None,
             error_code=code,
         )
+
+    # ------------------------------------------------------------------
+    # Final-decision audit failure trace
+    # ------------------------------------------------------------------
+
+    FALLBACK_GENESIS = "0" * 64
+    _FALLBACK_THREAD_LOCK = threading.Lock()
+
+    @staticmethod
+    def _error_digest(exc: BaseException) -> Dict[str, Any]:
+        """Exception class + sha256 (and length) of its message, never the text.
+
+        Storage-layer exception text can carry query values or content, so
+        the trace, fallback file, envelope and log only ever see this digest.
+        The hash is a correlation aid (match against the process's own logs),
+        not secrecy: a short, guessable message can be brute-forced.
+        """
+        try:
+            msg = str(exc)
+        except Exception:  # pragma: no cover - pathological __str__
+            msg = "<unprintable>"
+        return {
+            "error_class": type(exc).__name__,
+            "error_sha256": hashlib.sha256(msg.encode("utf-8", "replace")).hexdigest(),
+            "error_len": len(msg),
+        }
+
+    def _fallback_path(self) -> Optional[str]:
+        """Path of the append-only fallback file (None if none can be derived).
+
+        ``config["audit_fallback_path"]`` wins; otherwise it sits next to a
+        file-backed audit DB as ``<db>.final_write_failures.jsonl``.
+        """
+        p = self.config.get("audit_fallback_path")
+        if p:
+            return str(p)
+        db = str(getattr(self.engine.storage, "db_path", "") or "")
+        if not db or db == ":memory:" or db.startswith("file:"):
+            return None
+        return db + ".final_write_failures.jsonl"
+
+    def _record_final_write_failure(
+        self,
+        *,
+        entry_id: str,
+        overridden_hash: Optional[str],
+        ops_decision: str,
+        decision: str,
+        reasons: list,
+        exc: BaseException,
+        risk_signal: Any,
+    ) -> Dict[str, Any]:
+        """Leave a durable trace when the linked final-decision write failed.
+
+        1. One minimal BLOCK row (``result=stack_final_write_failed``) via
+           ``log_decision``; the failure facts sit in the signed intent.
+        2. If that also fails: one JSON line appended (O_APPEND + fsync) to
+           the fallback file, carrying its own sha256, the previous line's
+           sha256 and the last known chain tip / seq.
+
+        Never raises and never changes the decision (the caller has already
+        tightened to BLOCK).
+        """
+        storage = self.engine.storage
+        # A failed commit can leave this thread's connection mid-transaction
+        # with the half-written row; roll it back so the trace row does not
+        # commit it alongside (it would carry a stale prev_hash).
+        try:
+            storage.conn.rollback()
+        except Exception:
+            pass
+        facts: Dict[str, Any] = {
+            "stack_final_write_failed_for": entry_id,
+            **({"overrides_entry_hash": overridden_hash} if overridden_hash else {}),
+            "from": ops_decision,
+            "to": decision,
+            "error_class": type(exc).__name__,
+            "error_sha256": self._error_digest(exc)["error_sha256"],
+        }
+        trace: Dict[str, Any] = {"kind": None}
+        try:
+            trace_id = storage.log_decision(
+                intent=facts,
+                decision="BLOCK",
+                result="stack_final_write_failed",
+                verification_score=0.0,
+                risk_signal=risk_signal,
+                anomaly_signal=0.0,
+                policy_reasons=list(reasons),
+                metadata=dict(facts),
+                engine_version="GovernedStack final-write-failure",
+                enqueue_review=False,
+            )
+            return {"kind": "audit_row", "entry_id": trace_id}
+        except Exception as trace_exc:
+            trace["trace_row_error"] = self._error_digest(trace_exc)
+            try:
+                storage.conn.rollback()
+            except Exception:
+                pass
+
+        path = self._fallback_path()
+        record = {
+            "ts": time.time(),
+            "event": "stack_final_write_failed",
+            **facts,
+            "reasons": list(reasons),
+            "primary_error": self._error_digest(exc),
+            "trace_row_error": trace["trace_row_error"],
+            "chain_tip": getattr(storage, "_last_hash", None),
+            "chain_seq": getattr(storage, "_seq", None),
+        }
+        try:
+            if not path:
+                raise RuntimeError("no audit_fallback_path configured for a non-file audit DB")
+            digest = self._append_fallback_record(path, record)
+            trace.update(kind="fallback_file", path=path, sha256=digest,
+                         chain_tip=self._json_safe(record["chain_tip"]))
+        except Exception as fb_exc:
+            trace["kind"] = "lost"
+            trace["fallback_error"] = self._error_digest(fb_exc)
+            # JSON-safe copy: an unserialisable value is replaced by its type
+            # name, never str(value) (structured_log would otherwise apply
+            # default=str and could leak content).
+            trace["record"] = self._json_safe(record)
+        structured_log("audit_final_write_failed", entry_id=entry_id, trace=trace)
+        return trace
+
+    @classmethod
+    def _json_safe(cls, obj: Any, _depth: int = 0) -> Any:
+        """Copy of ``obj`` with only JSON types; others become a type marker.
+
+        Never calls ``str()`` on an unknown object, so its text cannot leak.
+        """
+        if obj is None or isinstance(obj, (bool, int, str)):
+            return obj
+        if isinstance(obj, float):
+            return obj if obj == obj and obj not in (float("inf"), float("-inf")) else repr(obj)
+        if _depth > 20:
+            return "<too-deep>"
+        if isinstance(obj, dict):
+            return {
+                (k if isinstance(k, str) else f"<key:{type(k).__name__}>"): cls._json_safe(v, _depth + 1)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (list, tuple)):
+            return [cls._json_safe(v, _depth + 1) for v in obj]
+        return f"<unserialisable:{type(obj).__name__}>"
+
+    @staticmethod
+    def _fallback_dumps(obj: Any) -> str:
+        """Canonical JSON for fallback lines: no default=str, no NaN/inf.
+
+        An unserialisable or non-finite value raises (TypeError/ValueError),
+        so the record fails into the ``lost`` tier instead of being written
+        with str() of an arbitrary object.
+        """
+        return json.dumps(obj, sort_keys=True, allow_nan=False)
+
+    @classmethod
+    def _append_fallback_record(cls, path: str, record: Dict[str, Any]) -> str:
+        """Append one hash-linked line; return its sha256.
+
+        The tail read and the append happen under one exclusive lock so two
+        failures can never link to the same ``prev_sha256`` (no fork):
+        a process-wide thread lock plus ``fcntl.flock(LOCK_EX)`` on the file
+        itself, which also excludes other processes and other stacks. The
+        file is opened once (O_RDWR|O_APPEND|O_CREAT, mode 0o600), read and
+        appended through the same descriptor, and fsynced before unlock.
+
+        Partial lines: if the file does not end in ``\n`` (an earlier crash
+        mid-write), the new line starts with ``\n`` so the torn fragment
+        stays its own (invalid) line and is not glued onto this record. A
+        short or failed write is truncated back to the pre-write size under
+        the lock, then raises (caller -> ``lost``). On first creation the
+        parent directory is fsynced (best effort, POSIX).
+        Mutates ``record["prev_sha256"]``.
+        """
+        # Fail before touching the file if the record cannot be serialised.
+        cls._fallback_dumps({**record, "prev_sha256": cls.FALLBACK_GENESIS})
+        with cls._FALLBACK_THREAD_LOCK:
+            fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                if _fcntl is not None:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX)
+                try:
+                    st = os.fstat(fd)
+                    if st.st_mode & 0o077:
+                        try:  # tighten a pre-existing, looser file
+                            os.fchmod(fd, 0o600)
+                        except OSError:
+                            pass
+                    size = st.st_size
+                    record["prev_sha256"] = cls._tail_sha(fd, size)
+                    canon = cls._fallback_dumps(record)
+                    digest = hashlib.sha256(canon.encode()).hexdigest()
+                    line = cls._fallback_dumps({"record": record, "sha256": digest}) + "\n"
+                    data = line.encode()
+                    if size > 0 and os.pread(fd, 1, size - 1) != b"\n":
+                        data = b"\n" + data  # isolate a torn previous line
+                    try:
+                        written = os.write(fd, data)
+                        if written != len(data):
+                            raise OSError(f"short write to fallback file ({written}/{len(data)})")
+                    except BaseException:
+                        try:  # leave no partial line behind
+                            os.ftruncate(fd, size)
+                            os.fsync(fd)
+                        except OSError:
+                            pass
+                        raise
+                    os.fsync(fd)
+                    if size == 0:
+                        cls._fsync_parent_dir(path)
+                    return digest
+                finally:
+                    if _fcntl is not None:
+                        _fcntl.flock(fd, _fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    @staticmethod
+    def _fsync_parent_dir(path: str) -> None:
+        """Best-effort fsync of the parent directory (new-file durability)."""
+        if os.name != "posix":
+            return
+        try:
+            dfd = os.open(os.path.dirname(os.path.abspath(path)) or ".",
+                          os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return
+        try:
+            os.fsync(dfd)
+        except OSError:
+            pass
+        finally:
+            os.close(dfd)
+
+    @staticmethod
+    def _record_line_sha(raw: bytes) -> Optional[str]:
+        """The ``sha256`` of a well-formed fallback line, else None."""
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+            digest = doc["sha256"]
+            if not isinstance(doc.get("record"), dict):
+                return None
+        except Exception:
+            return None
+        if isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+            return digest
+        return None
+
+    @classmethod
+    def _tail_sha(cls, fd: int, size: int) -> str:
+        """sha256 of the last well-formed line, read backwards via pread.
+
+        Lines that are not a well-formed record (a torn fragment from a
+        crash mid-write, or other garbage) are skipped for *linking* only;
+        ``verify_fallback_file`` still reports the first such line as the
+        break, so nothing is hidden. Genesis if no well-formed line exists.
+        """
+        pos, carry = size, b""
+        while pos > 0:
+            start = max(0, pos - 4096)
+            buf = os.pread(fd, pos - start, start) + carry
+            pos = start
+            parts = buf.split(b"\n")
+            # parts[0] may be an incomplete line unless we reached offset 0
+            carry = parts[0] if pos > 0 else b""
+            complete = parts[1:] if pos > 0 else parts
+            for raw in reversed(complete):
+                if raw.strip():
+                    digest = cls._record_line_sha(raw)
+                    if digest is not None:
+                        return digest
+        return cls.FALLBACK_GENESIS
+
+    @classmethod
+    def _last_fallback_sha(cls, path: str) -> str:
+        """sha256 of the last line in the fallback file (genesis if none)."""
+        if not os.path.exists(path):
+            return cls.FALLBACK_GENESIS
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            return cls._tail_sha(fd, os.fstat(fd).st_size)
+        finally:
+            os.close(fd)
+
+    @classmethod
+    def verify_fallback_file(cls, path: str) -> Dict[str, Any]:
+        """Recompute every line's sha256 and its prev_sha256 link.
+
+        Returns ``{"valid": True, "records": n}`` or, at the FIRST break,
+        ``{"valid": False, "line": i, "error": ..., "records_ok": n}``.
+        Never raises on file content: a torn/unparseable line (including bad
+        UTF-8), a non-object record, an edited record, a reordered or
+        deleted middle line are all reported as a break. Blank lines are
+        ignored. Error strings carry no file content.
+        """
+        prev = cls.FALLBACK_GENESIS
+        n = 0
+        with open(path, "rb") as fh:
+            for i, raw in enumerate(fh, 1):
+                if not raw.strip():
+                    continue
+                try:
+                    doc = json.loads(raw.decode("utf-8"))
+                    rec, digest = doc["record"], doc["sha256"]
+                    if not isinstance(rec, dict) or not isinstance(digest, str):
+                        raise TypeError("record/sha256 have wrong types")
+                    canon = cls._fallback_dumps(rec)
+                except Exception as e:
+                    return {"valid": False, "line": i, "error": f"unparseable:{type(e).__name__}",
+                            "records_ok": n}
+                if hashlib.sha256(canon.encode()).hexdigest() != digest:
+                    return {"valid": False, "line": i, "error": "sha256 mismatch", "records_ok": n}
+                if rec.get("prev_sha256") != prev:
+                    return {"valid": False, "line": i, "error": "prev_sha256 mismatch", "records_ok": n}
+                prev = digest
+                n += 1
+        return {"valid": True, "records": n}
 
     # ------------------------------------------------------------------
     # Solvers

@@ -217,7 +217,10 @@ class TestAuditFinalDecision(unittest.IsolatedAsyncioTestCase):
         env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
         self.assertEqual(env["decision"], "BLOCK")
         self.assertIn("audit_final_write_failed", env["reasons"])
-        self.assertEqual(len(self.rows(s)), 1)
+        # No linked final row; the failure itself is traced in the chain
+        # (tests/test_audit_final_write_trace.py).
+        rows = self.rows(s)
+        self.assertEqual([r[2] for r in rows], ["ops", "stack_final_write_failed"])
 
 
 if __name__ == "__main__":
