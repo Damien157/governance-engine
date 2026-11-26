@@ -9,6 +9,7 @@ file. govern() never raises and never loosens.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -31,6 +32,16 @@ from governed_stack import GovernedStack  # noqa: E402
 
 CONTROL = {"action": "control", "payload": {"text": "step"}, "u_nom": 5.0}
 SENTINEL = "SECRET-VALUE-123"
+MARKER = "SECRET-MARKER-XYZ"
+
+
+class _Unserialisable:
+    """Not JSON-serialisable; str()/repr() would leak MARKER."""
+
+    def __str__(self):
+        return MARKER
+
+    __repr__ = __str__
 
 
 def _mp_append(path, n, tag):
@@ -474,6 +485,223 @@ class TestAuditFinalWriteTrace(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("final_write_trace", env["audit"])
         self.assertEqual(self.rows(s), [])
         self.assertFalse(os.path.exists(cfg["audit_fallback_path"]))
+
+    # ---- review follow-up 2 (Damien, t190u) -------------------------------
+
+    def seed_fallback(self, path, n=1):
+        for i in range(n):
+            GovernedStack._append_fallback_record(path, {"event": "seed", "i": i})
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    @staticmethod
+    def file_lines(path):
+        with open(path, "rb") as fh:
+            return fh.read().split(b"\n")
+
+    async def test_torn_line_then_normal_record_stays_line_readable(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "fb.jsonl")
+        before = self.seed_fallback(path, 1)
+        good_sha = json.loads(before)["sha256"]
+        # Simulate a crash mid-write: half a record, no trailing newline.
+        torn = before[: len(before) // 2]
+        with open(path, "ab") as fh:
+            fh.write(torn)
+        s = self.make_stack({"audit_fallback_path": path})
+        self.fail_calls(s, {2, 3})
+        env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+        self.assertEqual(env["decision"], "BLOCK")
+        self.assertEqual(env["audit"]["final_write_trace"]["kind"], "fallback_file")
+        lines = self.file_lines(path)
+        self.assertEqual(lines[-1], b"")  # file ends with a newline
+        lines = lines[:-1]
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(lines[1], torn)  # fragment kept as its own line, not glued
+        new = json.loads(lines[2])  # the new record parses on its own
+        self.assertEqual(new["sha256"], env["audit"]["final_write_trace"]["sha256"])
+        # Linked past the torn fragment to the last well-formed record.
+        self.assertEqual(new["record"]["prev_sha256"], good_sha)
+        v = GovernedStack.verify_fallback_file(path)  # must not raise
+        self.assertEqual(v["valid"], False)
+        self.assertEqual(v["line"], 2)
+        self.assertTrue(v["error"].startswith("unparseable:"))
+        self.assertEqual(v["records_ok"], 1)
+
+    async def test_torn_utf8_line_verifier_reports_not_raises(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "fb.jsonl")
+        self.seed_fallback(path, 1)
+        with open(path, "ab") as fh:
+            fh.write('{"record": {"x": "\u00e9'.encode("utf-8")[:-1] + b"\xc3")  # cut mid-codepoint
+        GovernedStack._append_fallback_record(path, {"event": "after"})
+        v = GovernedStack.verify_fallback_file(path)
+        self.assertEqual((v["valid"], v["line"], v["records_ok"]), (False, 2, 1))
+        self.assertEqual(len([x for x in self.file_lines(path) if x]), 3)
+
+    async def test_short_write_truncated_back_to_old_size(self):
+        import governed_stack.stack as stack_mod
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "fb.jsonl")
+        before = self.seed_fallback(path, 1)
+        old_size = os.path.getsize(path)
+        s = self.make_stack({"audit_fallback_path": path})
+        self.fail_calls(s, {2, 3})
+        real_write = os.write
+
+        def half_write(fd, data):
+            return real_write(fd, data[: len(data) // 2])
+
+        stack_mod.os.write = half_write
+        try:
+            env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+        finally:
+            stack_mod.os.write = real_write
+        self.assertEqual(env["decision"], "BLOCK")
+        trace = env["audit"]["final_write_trace"]
+        self.assertEqual(trace["kind"], "lost")
+        self.assertEqual(trace["fallback_error"]["error_class"], "OSError")
+        self.assertEqual(os.path.getsize(path), old_size)
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+        self.assertEqual(GovernedStack.verify_fallback_file(path), {"valid": True, "records": 1})
+        # The next normal append links cleanly.
+        GovernedStack._append_fallback_record(path, {"event": "next"})
+        self.assertEqual(GovernedStack.verify_fallback_file(path), {"valid": True, "records": 2})
+
+    async def test_write_exception_truncated_back(self):
+        import governed_stack.stack as stack_mod
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "fb.jsonl")
+        before = self.seed_fallback(path, 2)
+        real_write = os.write
+
+        def write_then_fail(fd, data):
+            real_write(fd, data[:10])
+            raise OSError("EIO")
+
+        stack_mod.os.write = write_then_fail
+        try:
+            with self.assertRaises(OSError):
+                GovernedStack._append_fallback_record(path, {"event": "x"})
+        finally:
+            stack_mod.os.write = real_write
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+
+    async def test_verifier_recomputes_and_reports_first_break(self):
+        d = tempfile.mkdtemp()
+        base = os.path.join(d, "base.jsonl")
+        self.seed_fallback(base, 4)
+        with open(base, "rb") as fh:
+            good = fh.read().splitlines(keepends=True)
+        self.assertEqual(GovernedStack.verify_fallback_file(base), {"valid": True, "records": 4})
+
+        def check(name, lines, line, error):
+            p = os.path.join(d, name + ".jsonl")
+            with open(p, "wb") as fh:
+                fh.writelines(lines)
+            v = GovernedStack.verify_fallback_file(p)
+            self.assertEqual((v["valid"], v["line"], v["error"]), (False, line, error), name)
+
+        def edited(i, mutate, rehash):
+            doc = json.loads(good[i])
+            mutate(doc["record"])
+            if rehash:
+                doc["sha256"] = hashlib.sha256(GovernedStack._fallback_dumps(doc["record"]).encode()).hexdigest()
+            return (json.dumps(doc, sort_keys=True) + "\n").encode()
+
+        # Edit without rehash: that line's own hash fails.
+        check("edit", good[:1] + [edited(1, lambda r: r.update(i=99), False)] + good[2:], 2, "sha256 mismatch")
+        # Edit WITH a recomputed hash: the next line's prev link fails.
+        check("edit_rehash", good[:1] + [edited(1, lambda r: r.update(i=99), True)] + good[2:], 3,
+              "prev_sha256 mismatch")
+        # Reorder two middle lines.
+        check("reorder", [good[0], good[2], good[1], good[3]], 2, "prev_sha256 mismatch")
+        # Delete a middle line.
+        check("delete_middle", [good[0], good[2], good[3]], 2, "prev_sha256 mismatch")
+        # Delete the first line (genesis link broken).
+        check("delete_first", good[1:], 1, "prev_sha256 mismatch")
+        # Inserted garbage and a non-object record.
+        check("garbage", good[:2] + [b"not json\n"] + good[2:], 3, "unparseable:JSONDecodeError")
+        check("non_object", good[:1] + [b'{"record": [1], "sha256": "00"}\n'] + good[1:], 2,
+              "unparseable:TypeError")
+        # Two breaks: the first one is reported.
+        check("two_breaks", [good[0], good[2], b"junk\n", good[3]], 2, "prev_sha256 mismatch")
+
+    async def test_unserialisable_record_fails_into_lost_without_leaking(self):
+        logger = logging.getLogger("governed_stack.decisions")
+        buf = io.StringIO()
+        handler = logging.StreamHandler(buf)
+        old_level, old_disabled = logger.level, logger.disabled
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.disabled = False
+        self.addCleanup(logger.removeHandler, handler)
+        self.addCleanup(logger.setLevel, old_level)
+        self.addCleanup(setattr, logger, "disabled", old_disabled)
+        for field, bad, err in (("_last_hash", _Unserialisable(), "TypeError"),
+                                ("_seq", float("nan"), "ValueError")):
+            with self.subTest(field=field):
+                d = tempfile.mkdtemp()
+                path = os.path.join(d, "fb.jsonl")
+                s = self.make_stack({"audit_fallback_path": path})
+                storage = s.engine.storage
+                ops = s.engine.execute_governed_action
+
+                async def ops_then_poison(intent, token, _ops=ops, _st=storage, _f=field, _b=bad, **kw):
+                    out = await _ops(intent, token, **kw)
+                    setattr(_st, _f, _b)  # lands in record chain_tip / chain_seq
+                    return out
+
+                s.engine.execute_governed_action = ops_then_poison
+                self.fail_calls(s, {2, 3})
+                try:
+                    env = await s.govern(dict(CONTROL), s.issue_token("alice", "user"))
+                except BaseException as e:  # pragma: no cover
+                    self.fail(f"govern() raised {type(e).__name__}")
+                self.assertEqual(env["decision"], "BLOCK")
+                trace = env["audit"]["final_write_trace"]
+                self.assertEqual(trace["kind"], "lost")
+                self.assertEqual(trace["fallback_error"]["error_class"], err)
+                self.assertFalse(os.path.exists(path))  # rejected before the file is touched
+                self.assertNotIn(MARKER, json.dumps(env, default=str))
+                if field == "_last_hash":
+                    self.assertEqual(trace["record"]["chain_tip"], "<unserialisable:_Unserialisable>")
+                cur = storage.conn.cursor()
+                cur.execute("SELECT * FROM audit_log")
+                self.assertNotIn(MARKER, " ".join(str(c) for r in cur.fetchall() for c in r))
+        # Direct call: rejected, nothing created.
+        p = os.path.join(tempfile.mkdtemp(), "direct.jsonl")
+        with self.assertRaises(TypeError):
+            GovernedStack._append_fallback_record(p, {"x": _Unserialisable()})
+        self.assertFalse(os.path.exists(p))
+        handler.flush()
+        self.assertIn("audit_final_write_failed", buf.getvalue())
+        self.assertNotIn(MARKER, buf.getvalue())
+
+    async def test_parent_dir_fsynced_on_first_create_only(self):
+        import governed_stack.stack as stack_mod
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "fb.jsonl")
+        real_fsync = os.fsync
+        synced = []
+
+        def spy(fd):
+            synced.append("dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+            return real_fsync(fd)
+
+        stack_mod.os.fsync = spy
+        try:
+            GovernedStack._append_fallback_record(path, {"event": "first"})
+            first = list(synced)
+            synced.clear()
+            GovernedStack._append_fallback_record(path, {"event": "second"})
+            second = list(synced)
+        finally:
+            stack_mod.os.fsync = real_fsync
+        self.assertEqual(first, ["file", "dir"])
+        self.assertEqual(second, ["file"])
 
 
 if __name__ == "__main__":

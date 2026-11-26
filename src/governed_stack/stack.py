@@ -631,13 +631,47 @@ class GovernedStack:
                 raise RuntimeError("no audit_fallback_path configured for a non-file audit DB")
             digest = self._append_fallback_record(path, record)
             trace.update(kind="fallback_file", path=path, sha256=digest,
-                         chain_tip=record["chain_tip"])
+                         chain_tip=self._json_safe(record["chain_tip"]))
         except Exception as fb_exc:
             trace["kind"] = "lost"
             trace["fallback_error"] = self._error_digest(fb_exc)
-            trace["record"] = record
+            # JSON-safe copy: an unserialisable value is replaced by its type
+            # name, never str(value) (structured_log would otherwise apply
+            # default=str and could leak content).
+            trace["record"] = self._json_safe(record)
         structured_log("audit_final_write_failed", entry_id=entry_id, trace=trace)
         return trace
+
+    @classmethod
+    def _json_safe(cls, obj: Any, _depth: int = 0) -> Any:
+        """Copy of ``obj`` with only JSON types; others become a type marker.
+
+        Never calls ``str()`` on an unknown object, so its text cannot leak.
+        """
+        if obj is None or isinstance(obj, (bool, int, str)):
+            return obj
+        if isinstance(obj, float):
+            return obj if obj == obj and obj not in (float("inf"), float("-inf")) else repr(obj)
+        if _depth > 20:
+            return "<too-deep>"
+        if isinstance(obj, dict):
+            return {
+                (k if isinstance(k, str) else f"<key:{type(k).__name__}>"): cls._json_safe(v, _depth + 1)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (list, tuple)):
+            return [cls._json_safe(v, _depth + 1) for v in obj]
+        return f"<unserialisable:{type(obj).__name__}>"
+
+    @staticmethod
+    def _fallback_dumps(obj: Any) -> str:
+        """Canonical JSON for fallback lines: no default=str, no NaN/inf.
+
+        An unserialisable or non-finite value raises (TypeError/ValueError),
+        so the record fails into the ``lost`` tier instead of being written
+        with str() of an arbitrary object.
+        """
+        return json.dumps(obj, sort_keys=True, allow_nan=False)
 
     @classmethod
     def _append_fallback_record(cls, path: str, record: Dict[str, Any]) -> str:
@@ -649,8 +683,17 @@ class GovernedStack:
         itself, which also excludes other processes and other stacks. The
         file is opened once (O_RDWR|O_APPEND|O_CREAT, mode 0o600), read and
         appended through the same descriptor, and fsynced before unlock.
+
+        Partial lines: if the file does not end in ``\n`` (an earlier crash
+        mid-write), the new line starts with ``\n`` so the torn fragment
+        stays its own (invalid) line and is not glued onto this record. A
+        short or failed write is truncated back to the pre-write size under
+        the lock, then raises (caller -> ``lost``). On first creation the
+        parent directory is fsynced (best effort, POSIX).
         Mutates ``record["prev_sha256"]``.
         """
+        # Fail before touching the file if the record cannot be serialised.
+        cls._fallback_dumps({**record, "prev_sha256": cls.FALLBACK_GENESIS})
         with cls._FALLBACK_THREAD_LOCK:
             fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
             try:
@@ -663,16 +706,28 @@ class GovernedStack:
                             os.fchmod(fd, 0o600)
                         except OSError:
                             pass
-                    record["prev_sha256"] = cls._tail_sha(fd, st.st_size)
-                    canon = json.dumps(record, sort_keys=True, default=str)
+                    size = st.st_size
+                    record["prev_sha256"] = cls._tail_sha(fd, size)
+                    canon = cls._fallback_dumps(record)
                     digest = hashlib.sha256(canon.encode()).hexdigest()
-                    line = json.dumps({"record": record, "sha256": digest},
-                                      sort_keys=True, default=str) + "\n"
+                    line = cls._fallback_dumps({"record": record, "sha256": digest}) + "\n"
                     data = line.encode()
-                    written = os.write(fd, data)
-                    if written != len(data):
-                        raise OSError(f"short write to fallback file ({written}/{len(data)})")
+                    if size > 0 and os.pread(fd, 1, size - 1) != b"\n":
+                        data = b"\n" + data  # isolate a torn previous line
+                    try:
+                        written = os.write(fd, data)
+                        if written != len(data):
+                            raise OSError(f"short write to fallback file ({written}/{len(data)})")
+                    except BaseException:
+                        try:  # leave no partial line behind
+                            os.ftruncate(fd, size)
+                            os.fsync(fd)
+                        except OSError:
+                            pass
+                        raise
                     os.fsync(fd)
+                    if size == 0:
+                        cls._fsync_parent_dir(path)
                     return digest
                 finally:
                     if _fcntl is not None:
@@ -680,23 +735,60 @@ class GovernedStack:
             finally:
                 os.close(fd)
 
+    @staticmethod
+    def _fsync_parent_dir(path: str) -> None:
+        """Best-effort fsync of the parent directory (new-file durability)."""
+        if os.name != "posix":
+            return
+        try:
+            dfd = os.open(os.path.dirname(os.path.abspath(path)) or ".",
+                          os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return
+        try:
+            os.fsync(dfd)
+        except OSError:
+            pass
+        finally:
+            os.close(dfd)
+
+    @staticmethod
+    def _record_line_sha(raw: bytes) -> Optional[str]:
+        """The ``sha256`` of a well-formed fallback line, else None."""
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+            digest = doc["sha256"]
+            if not isinstance(doc.get("record"), dict):
+                return None
+        except Exception:
+            return None
+        if isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+            return digest
+        return None
+
     @classmethod
     def _tail_sha(cls, fd: int, size: int) -> str:
-        """sha256 of the last non-empty line, read backwards via pread."""
-        if size == 0:
-            return cls.FALLBACK_GENESIS
-        chunk, end, buf = 4096, size, b""
-        while end > 0:
-            start = max(0, end - chunk)
-            buf = os.pread(fd, end - start, start) + buf
-            end = start
-            stripped = buf.rstrip(b"\n\r \t")
-            if not stripped:
-                continue
-            nl = stripped.rfind(b"\n")
-            if nl >= 0 or end == 0:
-                last = stripped[nl + 1:]
-                return json.loads(last.decode("utf-8"))["sha256"]
+        """sha256 of the last well-formed line, read backwards via pread.
+
+        Lines that are not a well-formed record (a torn fragment from a
+        crash mid-write, or other garbage) are skipped for *linking* only;
+        ``verify_fallback_file`` still reports the first such line as the
+        break, so nothing is hidden. Genesis if no well-formed line exists.
+        """
+        pos, carry = size, b""
+        while pos > 0:
+            start = max(0, pos - 4096)
+            buf = os.pread(fd, pos - start, start) + carry
+            pos = start
+            parts = buf.split(b"\n")
+            # parts[0] may be an incomplete line unless we reached offset 0
+            carry = parts[0] if pos > 0 else b""
+            complete = parts[1:] if pos > 0 else parts
+            for raw in reversed(complete):
+                if raw.strip():
+                    digest = cls._record_line_sha(raw)
+                    if digest is not None:
+                        return digest
         return cls.FALLBACK_GENESIS
 
     @classmethod
@@ -712,23 +804,34 @@ class GovernedStack:
 
     @classmethod
     def verify_fallback_file(cls, path: str) -> Dict[str, Any]:
-        """Check every fallback line's sha256 and its prev_sha256 link."""
+        """Recompute every line's sha256 and its prev_sha256 link.
+
+        Returns ``{"valid": True, "records": n}`` or, at the FIRST break,
+        ``{"valid": False, "line": i, "error": ..., "records_ok": n}``.
+        Never raises on file content: a torn/unparseable line (including bad
+        UTF-8), a non-object record, an edited record, a reordered or
+        deleted middle line are all reported as a break. Blank lines are
+        ignored. Error strings carry no file content.
+        """
         prev = cls.FALLBACK_GENESIS
         n = 0
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "rb") as fh:
             for i, raw in enumerate(fh, 1):
                 if not raw.strip():
                     continue
                 try:
-                    doc = json.loads(raw)
+                    doc = json.loads(raw.decode("utf-8"))
                     rec, digest = doc["record"], doc["sha256"]
+                    if not isinstance(rec, dict) or not isinstance(digest, str):
+                        raise TypeError("record/sha256 have wrong types")
+                    canon = cls._fallback_dumps(rec)
                 except Exception as e:
-                    return {"valid": False, "line": i, "error": f"unparseable: {e}"}
-                canon = json.dumps(rec, sort_keys=True, default=str)
+                    return {"valid": False, "line": i, "error": f"unparseable:{type(e).__name__}",
+                            "records_ok": n}
                 if hashlib.sha256(canon.encode()).hexdigest() != digest:
-                    return {"valid": False, "line": i, "error": "sha256 mismatch"}
+                    return {"valid": False, "line": i, "error": "sha256 mismatch", "records_ok": n}
                 if rec.get("prev_sha256") != prev:
-                    return {"valid": False, "line": i, "error": "prev_sha256 mismatch"}
+                    return {"valid": False, "line": i, "error": "prev_sha256 mismatch", "records_ok": n}
                 prev = digest
                 n += 1
         return {"valid": True, "records": n}
