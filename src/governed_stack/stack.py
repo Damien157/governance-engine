@@ -15,6 +15,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+try:  # POSIX: cross-process lock for the audit fallback file
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX: thread lock only
+    _fcntl = None
+
 # ---------------------------------------------------------------------------
 # Import path bootstrap (repo layout is multi-root)
 # ---------------------------------------------------------------------------
@@ -106,7 +111,9 @@ class GovernedStack:
         self.metrics = DecisionMetrics()
         # Last-resort sink for a final-decision audit write that could not
         # reach the hash chain at all (see _record_final_write_failure).
-        self._fallback_lock = threading.Lock()
+        # Process-wide thread lock; cross-process safety is an flock on the
+        # file itself (see _append_fallback_record).
+        self._fallback_lock = GovernedStack._FALLBACK_THREAD_LOCK
 
     # ------------------------------------------------------------------
     # Lazy solvers
@@ -472,8 +479,9 @@ class GovernedStack:
                     risk_signal=risk_signal,
                 )
                 if final_write_trace.get("fallback_error"):
+                    fe = final_write_trace["fallback_error"]
                     notes.append(
-                        f"audit_final_trace_lost:{final_write_trace['fallback_error']}"
+                        f"audit_final_trace_lost:{fe['error_class']}:{fe['error_sha256'][:16]}"
                     )
 
         code = map_error_code(decision=decision, reasons=reasons, notes=notes)
@@ -511,6 +519,26 @@ class GovernedStack:
     # ------------------------------------------------------------------
 
     FALLBACK_GENESIS = "0" * 64
+    _FALLBACK_THREAD_LOCK = threading.Lock()
+
+    @staticmethod
+    def _error_digest(exc: BaseException) -> Dict[str, Any]:
+        """Exception class + sha256 (and length) of its message, never the text.
+
+        Storage-layer exception text can carry query values or content, so
+        the trace, fallback file, envelope and log only ever see this digest.
+        The hash is a correlation aid (match against the process's own logs),
+        not secrecy: a short, guessable message can be brute-forced.
+        """
+        try:
+            msg = str(exc)
+        except Exception:  # pragma: no cover - pathological __str__
+            msg = "<unprintable>"
+        return {
+            "error_class": type(exc).__name__,
+            "error_sha256": hashlib.sha256(msg.encode("utf-8", "replace")).hexdigest(),
+            "error_len": len(msg),
+        }
 
     def _fallback_path(self) -> Optional[str]:
         """Path of the append-only fallback file (None if none can be derived).
@@ -562,6 +590,7 @@ class GovernedStack:
             "from": ops_decision,
             "to": decision,
             "error_class": type(exc).__name__,
+            "error_sha256": self._error_digest(exc)["error_sha256"],
         }
         trace: Dict[str, Any] = {"kind": None}
         try:
@@ -579,7 +608,7 @@ class GovernedStack:
             )
             return {"kind": "audit_row", "entry_id": trace_id}
         except Exception as trace_exc:
-            trace["trace_row_error"] = f"{type(trace_exc).__name__}: {trace_exc}"
+            trace["trace_row_error"] = self._error_digest(trace_exc)
             try:
                 storage.conn.rollback()
             except Exception:
@@ -591,7 +620,7 @@ class GovernedStack:
             "event": "stack_final_write_failed",
             **facts,
             "reasons": list(reasons),
-            "primary_error": f"{type(exc).__name__}: {exc}",
+            "primary_error": self._error_digest(exc),
             "trace_row_error": trace["trace_row_error"],
             "chain_tip": getattr(storage, "_last_hash", None),
             "chain_seq": getattr(storage, "_seq", None),
@@ -599,39 +628,86 @@ class GovernedStack:
         try:
             if not path:
                 raise RuntimeError("no audit_fallback_path configured for a non-file audit DB")
-            with self._fallback_lock:
-                record["prev_sha256"] = self._last_fallback_sha(path)
-                canon = json.dumps(record, sort_keys=True, default=str)
-                digest = hashlib.sha256(canon.encode()).hexdigest()
-                line = json.dumps({"record": record, "sha256": digest}, sort_keys=True, default=str) + "\n"
-                fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-                try:
-                    os.write(fd, line.encode())
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
+            digest = self._append_fallback_record(path, record)
             trace.update(kind="fallback_file", path=path, sha256=digest,
                          chain_tip=record["chain_tip"])
         except Exception as fb_exc:
             trace["kind"] = "lost"
-            trace["fallback_error"] = f"{type(fb_exc).__name__}: {fb_exc}"
+            trace["fallback_error"] = self._error_digest(fb_exc)
             trace["record"] = record
         structured_log("audit_final_write_failed", entry_id=entry_id, trace=trace)
         return trace
+
+    @classmethod
+    def _append_fallback_record(cls, path: str, record: Dict[str, Any]) -> str:
+        """Append one hash-linked line; return its sha256.
+
+        The tail read and the append happen under one exclusive lock so two
+        failures can never link to the same ``prev_sha256`` (no fork):
+        a process-wide thread lock plus ``fcntl.flock(LOCK_EX)`` on the file
+        itself, which also excludes other processes and other stacks. The
+        file is opened once (O_RDWR|O_APPEND|O_CREAT, mode 0o600), read and
+        appended through the same descriptor, and fsynced before unlock.
+        Mutates ``record["prev_sha256"]``.
+        """
+        with cls._FALLBACK_THREAD_LOCK:
+            fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                if _fcntl is not None:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX)
+                try:
+                    st = os.fstat(fd)
+                    if st.st_mode & 0o077:
+                        try:  # tighten a pre-existing, looser file
+                            os.fchmod(fd, 0o600)
+                        except OSError:
+                            pass
+                    record["prev_sha256"] = cls._tail_sha(fd, st.st_size)
+                    canon = json.dumps(record, sort_keys=True, default=str)
+                    digest = hashlib.sha256(canon.encode()).hexdigest()
+                    line = json.dumps({"record": record, "sha256": digest},
+                                      sort_keys=True, default=str) + "\n"
+                    data = line.encode()
+                    written = os.write(fd, data)
+                    if written != len(data):
+                        raise OSError(f"short write to fallback file ({written}/{len(data)})")
+                    os.fsync(fd)
+                    return digest
+                finally:
+                    if _fcntl is not None:
+                        _fcntl.flock(fd, _fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    @classmethod
+    def _tail_sha(cls, fd: int, size: int) -> str:
+        """sha256 of the last non-empty line, read backwards via pread."""
+        if size == 0:
+            return cls.FALLBACK_GENESIS
+        chunk, end, buf = 4096, size, b""
+        while end > 0:
+            start = max(0, end - chunk)
+            buf = os.pread(fd, end - start, start) + buf
+            end = start
+            stripped = buf.rstrip(b"\n\r \t")
+            if not stripped:
+                continue
+            nl = stripped.rfind(b"\n")
+            if nl >= 0 or end == 0:
+                last = stripped[nl + 1:]
+                return json.loads(last.decode("utf-8"))["sha256"]
+        return cls.FALLBACK_GENESIS
 
     @classmethod
     def _last_fallback_sha(cls, path: str) -> str:
         """sha256 of the last line in the fallback file (genesis if none)."""
         if not os.path.exists(path):
             return cls.FALLBACK_GENESIS
-        last = None
-        with open(path, "r", encoding="utf-8") as fh:
-            for raw in fh:
-                if raw.strip():
-                    last = raw
-        if last is None:
-            return cls.FALLBACK_GENESIS
-        return json.loads(last)["sha256"]
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            return cls._tail_sha(fd, os.fstat(fd).st_size)
+        finally:
+            os.close(fd)
 
     @classmethod
     def verify_fallback_file(cls, path: str) -> Dict[str, Any]:
