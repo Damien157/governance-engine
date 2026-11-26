@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+_fcntl: Any
 try:  # POSIX: cross-process lock for the audit fallback file
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - non-POSIX: thread lock only
