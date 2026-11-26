@@ -86,6 +86,60 @@ logger = logging.getLogger("certified_governance")
 
 GENESIS_HASH = "0" * 64
 
+# Audit row hash-body versions (column audit_log.hash_schema).
+#   1 = legacy body {id, ts, decision, result, envelope, prev_hash,
+#       engine_version, environment_id}; metadata / policy_reasons unsigned.
+#   2 = v1 fields + hash_schema + the exact stored canonical-JSON text of the
+#       metadata and policy_reasons columns.
+# New rows are always written as AUDIT_HASH_SCHEMA. verify_chain checks each
+# row under its own version; any other value fails closed.
+AUDIT_HASH_SCHEMA = 2
+AUDIT_HASH_SCHEMAS = (1, 2)
+
+
+def _audit_c14n(obj: Any) -> str:
+    """Canonical JSON for signed audit columns (sorted keys, no whitespace).
+
+    ``allow_nan=False``: NaN / Infinity are not JSON, so a non-finite float in
+    metadata or policy_reasons raises ValueError here instead of being stored
+    and signed as nonstandard text. log_decision lets that ValueError
+    propagate before any SQL runs; execute_governed_action catches audit-write
+    failures and fails closed to BLOCK (reason ``audit_log_unavailable``).
+    """
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _audit_hash_body(row: Dict[str, Any], schema: Any) -> bytes:
+    """Bytes that are SHA-256 hashed and RSA-signed for one audit row.
+
+    ``row`` uses the stored representation: ``envelope`` parsed, and
+    ``metadata`` / ``policy_reasons`` as the exact TEXT stored in the DB
+    (v2 hashes that text byte for byte, so any edit changes the hash).
+    Raises ValueError for an unknown schema or a malformed v2 field.
+    """
+    base = {
+        "id": row["id"],
+        "ts": row["ts"],
+        "decision": row["decision"],
+        "result": row["result"],
+        "envelope": row["envelope"],
+        "prev_hash": row["prev_hash"],
+        "engine_version": row["engine_version"],
+        "environment_id": row["environment_id"],
+    }
+    # bool is an int subclass: True == 1 must not select the v1 body.
+    if type(schema) is not int or schema not in AUDIT_HASH_SCHEMAS:
+        raise ValueError(f"unknown_hash_schema:{schema!r}")
+    if schema == 1:
+        return json.dumps(base, sort_keys=True).encode()
+    md, pr = row["metadata"], row["policy_reasons"]
+    if not isinstance(md, str) or not isinstance(pr, str):
+        raise ValueError("v2_unsigned_field_missing")
+    base["hash_schema"] = 2
+    base["metadata"] = md
+    base["policy_reasons"] = pr
+    return _audit_c14n(base).encode()
+
 # ============================================================================
 # MATHEMATICAL SIGNALS (HEURISTIC, DECISION-SUPPORT ONLY)
 # ============================================================================
@@ -492,10 +546,36 @@ class AuditStorage:
                 entry_hash TEXT,
                 signature TEXT,
                 engine_version TEXT,
-                environment_id TEXT
+                environment_id TEXT,
+                hash_schema INTEGER NOT NULL DEFAULT 1
             )
             """
         )
+        # Signed v1→v2 cutover record (see _cutover_payload). Written in the
+        # same transaction as the first v2 row; verify_chain requires every
+        # row from that id onward to be v2 and every row before it to be v1.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                signature TEXT NOT NULL
+            )
+            """
+        )
+        # Migration: DBs created before hash_schema existed get the column
+        # with DEFAULT 1, so every pre-existing row keeps verifying under the
+        # legacy v1 body. New rows are written explicitly as v2.
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(audit_log)").fetchall()}
+        if "hash_schema" not in cols:
+            try:
+                cur.execute(
+                    "ALTER TABLE audit_log ADD COLUMN hash_schema INTEGER NOT NULL DEFAULT 1"
+                )
+            except sqlite3.OperationalError as e:
+                # Another process migrated first; anything else is fatal.
+                if "duplicate column" not in str(e).lower():
+                    raise
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC)"
         )
@@ -528,6 +608,38 @@ class AuditStorage:
             self._last_ts = float(row["timestamp"] or 0.0)
         self._seq = int(cur.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0])
         self._bootstrap_anchor()
+
+    # ------------------------------------------------------------------
+    # Hash-schema cutover boundary (v1 → v2)
+    # ------------------------------------------------------------------
+    _CUTOVER_KEY = "hash_schema_cutover"
+
+    @staticmethod
+    def _cutover_payload(first_v2_id: str) -> bytes:
+        return _audit_c14n(
+            {
+                "v": 1,
+                "kind": "audit_hash_schema_cutover",
+                "schema": AUDIT_HASH_SCHEMA,
+                "first_v2_id": first_v2_id,
+            }
+        ).encode()
+
+    def _read_cutover(self) -> Tuple[str, Optional[str]]:
+        """Return ("none", None), ("ok", first_v2_id) or ("bad", None)."""
+        row = self.conn.execute(
+            "SELECT value, signature FROM audit_meta WHERE key = ?", (self._CUTOVER_KEY,)
+        ).fetchone()
+        if row is None:
+            return "none", None
+        try:
+            first = json.loads(row["value"])["first_v2_id"]
+            ok = isinstance(first, str) and self.crypto.verify(
+                self._cutover_payload(first), base64.b64decode(row["signature"])
+            )
+        except Exception:
+            ok = False
+        return ("ok", first) if ok else ("bad", None)
 
     # ------------------------------------------------------------------
     # Truncation guard (signed head anchor)
@@ -702,7 +814,11 @@ class AuditStorage:
                 # Strictly monotonic under the writer lock (clock skew / ties).
                 ts = self._last_ts + 1e-6
             prev_hash = self._last_hash
-            body = json.dumps(
+            # v2: metadata / policy_reasons are stored as canonical JSON and
+            # that exact text is inside the hashed + signed body.
+            metadata_json = _audit_c14n(metadata or {})
+            policy_reasons_json = _audit_c14n(policy_reasons or [])
+            body = _audit_hash_body(
                 {
                     "id": entry_id,
                     "ts": ts,
@@ -712,9 +828,11 @@ class AuditStorage:
                     "prev_hash": prev_hash,
                     "engine_version": engine_version,
                     "environment_id": environment_id,
+                    "metadata": metadata_json,
+                    "policy_reasons": policy_reasons_json,
                 },
-                sort_keys=True,
-            ).encode()
+                AUDIT_HASH_SCHEMA,
+            )
             entry_hash = hashlib.sha256(body).hexdigest()
             signature = base64.b64encode(self.crypto.sign(body)).decode()
 
@@ -725,8 +843,8 @@ class AuditStorage:
                 (id, timestamp, decision, result, verification_score, risk_signal,
                  anomaly_signal, policy_reasons, metadata, trace_id,
                  intent_envelope, prev_hash, entry_hash, signature,
-                 engine_version, environment_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 engine_version, environment_id, hash_schema)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -736,8 +854,8 @@ class AuditStorage:
                     verification_score,
                     risk_signal,
                     anomaly_signal,
-                    json.dumps(policy_reasons or []),
-                    json.dumps(metadata or {}),
+                    policy_reasons_json,
+                    metadata_json,
                     trace_id or "",
                     json.dumps(envelope),
                     prev_hash,
@@ -745,8 +863,24 @@ class AuditStorage:
                     signature,
                     engine_version,
                     environment_id,
+                    AUDIT_HASH_SCHEMA,
                 ),
             )
+            if cur.execute(
+                "SELECT 1 FROM audit_meta WHERE key = ?", (self._CUTOVER_KEY,)
+            ).fetchone() is None:
+                # First v2 row in this DB: record the signed boundary in the
+                # same transaction, so it commits iff the row does.
+                cur.execute(
+                    "INSERT INTO audit_meta (key, value, signature) VALUES (?, ?, ?)",
+                    (
+                        self._CUTOVER_KEY,
+                        _audit_c14n({"first_v2_id": entry_id}),
+                        base64.b64encode(
+                            self.crypto.sign(self._cutover_payload(entry_id))
+                        ).decode(),
+                    ),
+                )
             if decision == "REVIEW" and enqueue_review:
                 # Same connection, same transaction as the INSERT above --
                 # committed together, so the audit log and the review
@@ -952,7 +1086,8 @@ class AuditStorage:
         rows = cur.execute(
             """
             SELECT id, timestamp, decision, result, intent_envelope,
-                   prev_hash, entry_hash, signature, engine_version, environment_id
+                   prev_hash, entry_hash, signature, engine_version, environment_id,
+                   metadata, policy_reasons, hash_schema
             FROM audit_log ORDER BY timestamp ASC, rowid ASC
             """
         ).fetchall()
@@ -961,25 +1096,70 @@ class AuditStorage:
         last_hash = GENESIS_HASH
         total = len(rows)
 
-        for r in rows:
+        # Which version each row MUST have comes from the signed cutover
+        # record, not from the row: rows before first_v2_id must be v1, that
+        # row and every later one must be v2. If the record is missing while
+        # v2 rows exist, has a bad signature, or names an id not in the
+        # chain (e.g. that row was deleted), the boundary falls back to the
+        # first row whose column says 2, AND that row is marked broken, so
+        # the chain cannot verify. (Deleting the cutover row itself also
+        # breaks its successor's prev_hash link.)
+        cut_state, cut_id = self._read_cutover()
+        ids_in_order = [r["id"] for r in rows]
+        first_v2 = next(
+            (i for i, r in enumerate(rows) if r["hash_schema"] == 2), total
+        )
+        boundary_fault: Optional[int] = None
+        if cut_state == "ok" and cut_id in ids_in_order:
+            cut_idx = ids_in_order.index(cut_id)
+        elif cut_state == "none" and first_v2 == total:
+            cut_idx = total  # pre-v2 DB: every row must be v1
+        else:
+            cut_idx = first_v2
+            boundary_fault = min(first_v2, total - 1) if total else None
+            logger.warning(f"audit hash_schema cutover unusable: {cut_state}")
+        for i, r in enumerate(rows):
+            # Envelope / signature decode errors still raise, exactly as
+            # before: the engine treats a verify_chain exception as "chain
+            # unavailable" (integrity 1.0), which is stricter than one row.
             envelope = json.loads(r["intent_envelope"])
-            body = json.dumps(
-                {
-                    "id": r["id"],
-                    "ts": r["timestamp"],
-                    "decision": r["decision"],
-                    "result": r["result"],
-                    "envelope": envelope,
-                    "prev_hash": r["prev_hash"],
-                    "engine_version": r["engine_version"],
-                    "environment_id": r["environment_id"],
-                },
-                sort_keys=True,
-            ).encode()
-
-            recomputed = hashlib.sha256(body).hexdigest()
-            hash_ok = recomputed == r["entry_hash"] and r["prev_hash"] == last_hash
-            sig_ok = self.crypto.verify(body, base64.b64decode(r["signature"]))
+            signature = base64.b64decode(r["signature"])
+            schema = r["hash_schema"]
+            try:
+                body = _audit_hash_body(
+                    {
+                        "id": r["id"],
+                        "ts": r["timestamp"],
+                        "decision": r["decision"],
+                        "result": r["result"],
+                        "envelope": envelope,
+                        "prev_hash": r["prev_hash"],
+                        "engine_version": r["engine_version"],
+                        "environment_id": r["environment_id"],
+                        "metadata": r["metadata"],
+                        "policy_reasons": r["policy_reasons"],
+                    },
+                    schema,
+                )
+            except (ValueError, KeyError, TypeError):
+                # Unknown/NULL hash_schema, a v2 row with a NULL
+                # metadata/policy_reasons column, or any other malformed
+                # field: this row is unverifiable = broken. Record it and
+                # keep going, so every bad row is reported, not just the
+                # first one.
+                body = None
+            if body is None:
+                hash_ok = sig_ok = False
+            else:
+                recomputed = hashlib.sha256(body).hexdigest()
+                hash_ok = recomputed == r["entry_hash"] and r["prev_hash"] == last_hash
+                sig_ok = self.crypto.verify(body, signature)
+            # Boundary: the expected version is positional, so setting a v2
+            # row's column back to 1 (or a v1 row's to 2) fails here as well
+            # as in the hash (hash_schema is inside the v2 hashed body).
+            expected = 1 if i < cut_idx else 2
+            if type(schema) is not int or schema != expected or i == boundary_fault:
+                hash_ok = False
 
             if not (hash_ok and sig_ok):
                 broken.append(r["id"])

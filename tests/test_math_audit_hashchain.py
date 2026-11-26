@@ -1,7 +1,9 @@
 """Maths of the audit trail, intent hashing, score projection and the QUANTUM line.
 
 Hash chain (certified_governance_unified.AuditStorage)
-    body_i      = JSON(sort_keys){id, ts, decision, result, envelope, prev_hash, engine_version, environment_id}
+    body_i      = JSON(sort_keys){id, ts, decision, result, envelope, prev_hash, engine_version, environment_id}  (hash_schema 1)
+                  v2 rows (hash_schema 2, all new rows) add {hash_schema: 2, metadata, policy_reasons} (stored canonical
+                  JSON text) and use compact separators; see tests/test_audit_sign_metadata.py.
     entry_hash_i = SHA256(body_i)                     (recomputed here with hashlib, independent of the class)
     prev_hash_1 = "0"*64 (genesis);   prev_hash_{i+1} = entry_hash_i
     signature_i = RSA-PSS(body_i)  -> verify_chain flags row i iff
@@ -94,6 +96,10 @@ def _body(row, **override):
         "envelope": json.loads(row["intent_envelope"]), "prev_hash": row["prev_hash"],
         "engine_version": row["engine_version"], "environment_id": row["environment_id"],
     }
+    if row["hash_schema"] == 2:  # v2 (fix/audit-sign-metadata): also binds hash_schema + stored metadata/policy_reasons text
+        d.update(hash_schema=2, metadata=row["metadata"], policy_reasons=row["policy_reasons"])
+        d.update(override)
+        return json.dumps(d, sort_keys=True, separators=(",", ":")).encode()
     d.update(override)
     return json.dumps(d, sort_keys=True).encode()
 

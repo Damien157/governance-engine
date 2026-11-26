@@ -44,7 +44,7 @@ AREAS: list[tuple[str, str]] = [
     ("social_posts", r"social"),
     ("tool_agent_0.7", r"governed_tool|action_bus|connectors|lint_no_bypass"),
     ("bio_judge_kernel_overlay", r"bio_"),
-    ("audit", r"audit|spectral|observability|review"),
+    ("audit", r"audit|spectral|observability|review"),  # incl. test_audit_sign_metadata
     ("control_loop_qp", r"osqp|clf_cbf|control_logic|math_cores|lie_and|safety_sim|qp_controller|invariant"),
     ("governance_gate", r"governed_stack|stack_qp|contracts|key_providers|sidecar|runtime_bridge|governed_algorithm|runner_coverage"),
     ("unified_all_works", r"unified|all_works|quantum_line"),
