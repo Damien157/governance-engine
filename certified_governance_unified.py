@@ -603,9 +603,6 @@ class AuditStorage:
         self._bootstrap_anchor()
 
     # ------------------------------------------------------------------
-    # Truncation guard (signed head anchor)
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
     # Hash-schema cutover boundary (v1 → v2)
     # ------------------------------------------------------------------
     _CUTOVER_KEY = "hash_schema_cutover"
@@ -637,6 +634,9 @@ class AuditStorage:
             ok = False
         return ("ok", first) if ok else ("bad", None)
 
+    # ------------------------------------------------------------------
+    # Truncation guard (signed head anchor)
+    # ------------------------------------------------------------------
     def _anchor_payload(self, seq: int, head_hash: str) -> bytes:
         return json.dumps(
             {
