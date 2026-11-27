@@ -56,6 +56,8 @@ EXTRA_PYTEST_DIRS = [
     "haven2/tests",
     "imprint/tests",
     "hais/hais_tests",
+    # CDCL SAT solver suite (separate from the governance product; compiles solvers/cdcl.c with gcc).
+    "solvers/tests",
 ]
 
 UNCLASSIFIED = "other"
