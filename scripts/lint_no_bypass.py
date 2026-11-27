@@ -14,12 +14,18 @@ Allowlist (relative to repo root):
   - scripts/lint_no_bypass.py (this file)
   - scripts/send_governed_mail.py (documents forbidden symbols in strings)
   - src/governed_stack/AGENT_*.md
+
+Draft-only relay ban (``src/governed_stack/mail_relay*.py``): those modules
+must never name a mail-transmit endpoint or scope, or an inbox-read method.
+Scanned over the whole file, comments and docstrings included, so the ban
+cannot be hidden behind a comment marker. See docs/MAIL_RELAY.md.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import re
 import sys
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
@@ -52,6 +58,26 @@ FORBIDDEN_ATTR_CALLS: frozenset[str] = frozenset(
         "call_tool",
         "invoke_tool",
     }
+)
+
+# Draft-only relay modules: stricter, full-text ban (no comment skipping).
+RELAY_PREFIX = "src/governed_stack/mail_relay"
+RELAY_FORBIDDEN_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    (r"/send\b", "transmit endpoint path"),
+    (r"\.send\b", "transmit method (drafts.send / messages.send)"),
+    (r"(?i)sendmail", "Graph sendMail"),
+    (r"(?i)send_?draft", "draft transmit call"),
+    (r"Mail\.Send", "Graph transmit permission"),
+    (r"(?i)auth/gmail\.send", "Gmail transmit scope"),
+    (r"googleapis\.com/auth/(?!gmail\.compose\b)", "Gmail scope other than gmail.compose"),
+    (r"mail\.google\.com", "Gmail full-access scope"),
+    (r"Mail\.Read(?!Write\b)", "Graph read-only/basic mail permission"),
+    (r"(?i)gmail\.(readonly|modify|metadata|insert|labels|settings)", "Gmail read/modify scope"),
+    (r"[\"'](GET|PUT|PATCH|DELETE)[\"']", "non-POST HTTP method (no inbox reads)"),
+    (r"/messages/[^\"'\s]*/(reply|forward|createReply|createForward)", "reply/forward endpoint"),
+)
+RELAY_FORBIDDEN_ATTRS: frozenset[str] = frozenset(
+    {"send", "sendmail", "send_mail", "send_draft", "send_message", "sendMail"}
 )
 
 ALLOWLIST_PREFIXES: Tuple[str, ...] = (
@@ -157,6 +183,34 @@ def _scan_ast(rel: str, text: str) -> List[str]:
     return visitor.hits
 
 
+def is_relay_module(rel: str) -> bool:
+    return rel.startswith(RELAY_PREFIX) and rel.endswith(".py")
+
+
+def scan_relay(rel: str, text: str) -> List[str]:
+    """Draft-only ban for relay modules: whole text (comments included) + AST."""
+    hits: List[str] = []
+    for i, line in enumerate(text.splitlines(), start=1):
+        for pat, why in RELAY_FORBIDDEN_PATTERNS:
+            if re.search(pat, line):
+                hits.append(f"{rel}:{i}: relay draft-only ban: {why} ({pat!r})")
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return hits + [f"{rel}: relay module does not parse"]
+    for node in ast.walk(tree):
+        name = None
+        if isinstance(node, ast.Attribute):
+            name = node.attr
+        elif isinstance(node, ast.Name):
+            name = node.id
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        if name and name in RELAY_FORBIDDEN_ATTRS:
+            hits.append(f"{rel}:{getattr(node, 'lineno', '?')}: relay draft-only ban: name {name!r}")
+    return hits
+
+
 def lint_paths(paths: Iterable[Path]) -> List[str]:
     violations: List[str] = []
     for path in paths:
@@ -171,6 +225,8 @@ def lint_paths(paths: Iterable[Path]) -> List[str]:
         violations.extend(_scan_text(rel, text))
         if path.suffix == ".py":
             violations.extend(_scan_ast(rel, text))
+        if is_relay_module(rel):
+            violations.extend(scan_relay(rel, text))
     return violations
 
 
@@ -201,6 +257,22 @@ def self_check() -> int:
     clean = "def go():\n    return 1\n"
     assert _scan_text("src/governed_stack/clean.py", clean) == []
     assert _scan_ast("src/governed_stack/clean.py", clean) == []
+
+    # 4) Relay draft-only ban catches transmit endpoints/scopes, even in comments.
+    for snippet in (
+        "URL = 'https://gmail.googleapis.com/gmail/v1/users/me/drafts/send'\n",
+        "# Mail.Send\n",
+        "x = svc.users().drafts().send(body=b)\n",
+        "U = 'https://graph.microsoft.com/v1.0/me/sendMail'\n",
+        "S = 'https://www.googleapis.com/auth/gmail.send'\n",
+        "m = 'GET'\n",
+    ):
+        assert scan_relay("src/governed_stack/mail_relay.py", snippet), snippet
+    assert scan_relay(
+        "src/governed_stack/mail_relay.py",
+        "S = 'https://www.googleapis.com/auth/gmail.compose'\nP = 'Mail.ReadWrite'\n",
+    ) == []
+    assert is_relay_module("src/governed_stack/mail_relay_providers.py")
 
     print("lint_no_bypass self-check: OK")
     return 0

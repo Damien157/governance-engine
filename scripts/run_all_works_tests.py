@@ -39,6 +39,7 @@ AREAS: list[tuple[str, str]] = [
     # Mathematics suite (docs/MATH_TESTS.md); listed first so it wins over the generic patterns below.
     ("mathematics", r"test_math_(?!cores)"),
     ("sealed_mail", r"sealed_mail"),
+    ("mail_relay", r"mail_relay"),
     ("mail", r"governed_mail"),
     ("calendar", r"calendar"),
     ("social_posts", r"social"),
