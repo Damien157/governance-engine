@@ -126,6 +126,7 @@
  */
 
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -528,43 +529,85 @@ static void init_watches(void) {
     S.watches = calloc(S.watches_len, sizeof(WatchNode *));
 }
 
+/* DIMACS CNF reader (hardened).
+ *  - streams characters, so line length is unlimited (long comments are fine)
+ *  - any whitespace (incl. '\r') separates tokens; blank CRLF lines are ignored
+ *  - clause buffer grows dynamically (no fixed 10000-literal limit)
+ *  - 'c' lines are comments; a '%' line ends input (SATLIB trailer "%\n0")
+ *  - a non-numeric token is an error (exit 1), never an empty clause
+ *  - a clause not terminated by 0 at end of file is an error (exit 1)
+ *  - a lone "0" with no literals is a genuine empty clause => UNSAT        */
+static bool parse_fail(const char *msg, const char *tok) {
+    fprintf(stderr, "parse error: %s%s%s\n", msg, tok ? ": " : "", tok ? tok : "");
+    return false;
+}
+
 static bool parse_dimacs(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "Cannot open %s\n", path); return false; }
 
-    char line[65536];
-    int expected_vars = 0, expected_clauses = 0;
-    Lit buf[10000];
-    int buf_n = 0;
+    Lit *buf = NULL;
+    size_t cap = 0, n = 0;
+    int ch;
+    bool line_start = true;
+    bool ok = true;
 
-    while (fgets(line, sizeof(line), f)) {
-        if (line[0] == 'c') continue;
-        if (line[0] == 'p') {
-            sscanf(line, "p cnf %d %d", &expected_vars, &expected_clauses);
-            ensure_var_capacity(expected_vars);
+    while (ok && (ch = getc(f)) != EOF) {
+        if (isspace(ch)) { if (ch == '\n') line_start = true; continue; }
+        if (line_start && (ch == 'c' || ch == 'p' || ch == '%')) {
+            if (ch == '%') break;
+            char line[512];
+            size_t k = 0;
+            line[k++] = (char)ch;
+            while ((ch = getc(f)) != EOF && ch != '\n')
+                if (k < sizeof(line) - 1) line[k++] = (char)ch;
+            line[k] = 0;
+            if (line[0] == 'p') {
+                int ev = 0, ec = 0;
+                if (sscanf(line, "p cnf %d %d", &ev, &ec) >= 1 && ev >= 0 && ev < 100000000)
+                    ensure_var_capacity(ev);
+                else { ok = parse_fail("bad problem line", line); break; }
+            }
+            line_start = true;
             continue;
         }
-        char *tok = strtok(line, " \t\n");
-        while (tok) {
-            int val = atoi(tok);
-            if (val == 0) {
-                if (buf_n > 0) {
-                    for (int i = 0; i < buf_n; i++) ensure_var_capacity(var_of(buf[i]));
-                    int ci = add_clause_storage(buf, buf_n, false);
-                    attach_clause(ci);
-                    buf_n = 0;
-                } else {
-                    /* Empty clause: formula is trivially unsatisfiable. */
-                    g_trivial_unsat = true;
-                }
+        line_start = false;
+        char tok[64];
+        size_t k = 0;
+        tok[k++] = (char)ch;
+        while ((ch = getc(f)) != EOF && !isspace(ch))
+            if (k < sizeof(tok) - 1) tok[k++] = (char)ch;
+        tok[k] = 0;
+        if (ch == '\n') line_start = true;
+
+        char *end = NULL;
+        long val = strtol(tok, &end, 10);
+        if (end == tok || *end != 0 || val > 99999999L || val < -99999999L) {
+            ok = parse_fail("invalid token", tok);
+            break;
+        }
+        if (val == 0) {
+            if (n > 0) {
+                for (size_t i = 0; i < n; i++) ensure_var_capacity(var_of(buf[i]));
+                int ci = add_clause_storage(buf, (int)n, false);
+                attach_clause(ci);
+                n = 0;
             } else {
-                buf[buf_n++] = val;
+                g_trivial_unsat = true;   /* genuine empty clause */
             }
-            tok = strtok(NULL, " \t\n");
+        } else {
+            if (n == cap) {
+                cap = cap ? cap * 2 : 64;
+                buf = realloc(buf, sizeof(Lit) * cap);
+                if (!buf) { ok = parse_fail("out of memory", NULL); break; }
+            }
+            buf[n++] = (Lit)val;
         }
     }
+    if (ok && n > 0) ok = parse_fail("clause not terminated by 0 at end of file", NULL);
+    free(buf);
     fclose(f);
-    return true;
+    return ok;
 }
 
 /* ---------- Entry point ---------- */
