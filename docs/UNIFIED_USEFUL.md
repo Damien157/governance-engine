@@ -152,4 +152,4 @@ Integrity queue for keys / latch / spectrum honesty is **largely closed on `main
 Customer edge has contract + smoke + live eval; audit projection is a **shadow**, not a product SKU.
 Still closer to **solid prototype / operable gate** than production SaaS until CI unlocks and deploy/TLS land.
 
-**Not:** P vs NP proof, consciousness product, quantum computer, or remote execute API.
+**Not:** a complexity-theory result, consciousness product, quantum computer, or remote execute API.

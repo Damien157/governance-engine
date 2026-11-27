@@ -5,7 +5,7 @@ Live gate for algorithm **run / deploy** decisions. Same shape as
 `GovernedStack.govern()`, return **ALLOW / BLOCK / REVIEW**. Does **not**
 execute algorithms; it only decides.
 
-This is **not** a P vs NP proof, a complexity-class certificate, or a claim
+This is **not** a complexity-class certificate or a claim
 that any particular speedup is asymptotically optimal.
 
 ## Five axes
@@ -58,13 +58,13 @@ Alongside QUANTUM, Audit may include `spectrum` — finite Dirichlet summaries
 
 ## Buyer product slice
 
-One-page sealed-ALLOW overview (no P vs NP / consciousness / valuation hype):
+One-page sealed-ALLOW overview (no complexity-theory / consciousness / valuation hype):
 [PRODUCT_SLICE.md](PRODUCT_SLICE.md).
 
 ## Related charters
 
 [GOVERNED_CONTROLLER_NN.md](GOVERNED_CONTROLLER_NN.md),
-[NVNP_CONJECTURES.md](NVNP_CONJECTURES.md) (conjectures only — **not** a P vs NP proof).
+[NVNP_CONJECTURES.md](NVNP_CONJECTURES.md) (research conjectures only; not product material).
 Safeguard charter: [ATOM_SAFEGUARD_II.md](ATOM_SAFEGUARD_II.md).
 Out-of-band research sketch (not a live gate): [ANALYTIC_ZERO_SUITE.md](ANALYTIC_ZERO_SUITE.md).
 Parked slide material (**not** product / not live gate): [SIDED_ASIDE.md](SIDED_ASIDE.md).

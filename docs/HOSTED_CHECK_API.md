@@ -99,7 +99,7 @@ Stable operator-facing shape for `POST /v1/check`. Check-only — no remote side
 
 - `POST /v1/execute` → HTTP 405 `{ "error": "execute_not_supported" }`
 - Not a sender / calendar writer / social publisher
-- Not a Clay / P vs NP claim surface
+- Not a complexity-theory claim surface
 
 ### Operator smoke + eval
 
