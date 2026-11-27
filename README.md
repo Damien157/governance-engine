@@ -14,7 +14,7 @@ A **governed request stack** that composes Damien O’Driscoll’s existing pack
 
 **Front door:** `HavenUnified` (alias `GovernedUnified`) → `GovernedStack.govern(intent, token)` → mail/calendar/social/algorithm adapters.
 
-This is **not** a P vs NP proof, a theory of everything, AGI, a formal certificate authority product, or a quantum / DNA computer. Imprint’s “superposition” is a weighted classical draw over matchings; Haven2’s “transistor” is a discrete latch on energy residual; HAIS caps capability from telemetry.
+This is **not** a theory of everything, AGI, a formal certificate authority product, or a quantum / DNA computer. Imprint’s “superposition” is a weighted classical draw over matchings; Haven2’s “transistor” is a discrete latch on energy residual; HAIS caps capability from telemetry.
 
 ## Three tiers
 
@@ -115,7 +115,7 @@ pip install -e ".[dev]"            # optional; PYTHONPATH also works
 
 ## Algorithm run / deploy gate
 
-`GovernedAlgorithm` puts `GovernedStack.govern()` in front of algorithm run/deploy without ever executing. Scans Purpose (purpose/summary), Cost (time/space/energy/speedup), and Risk (notes/security_margin) — **BLOCK means do not run or deploy**. Speedup is a Cost claim; security lives under Risk; energy is a Cost estimate. **Not** a P vs NP proof. Charter: [`docs/ALGORITHM_GOVERNANCE_MAIN.md`](docs/ALGORITHM_GOVERNANCE_MAIN.md).
+`GovernedAlgorithm` puts `GovernedStack.govern()` in front of algorithm run/deploy without ever executing. Scans Purpose (purpose/summary), Cost (time/space/energy/speedup), and Risk (notes/security_margin) — **BLOCK means do not run or deploy**. Speedup is a Cost claim; security lives under Risk; energy is a Cost estimate. It does not certify complexity claims. Charter: [`docs/ALGORITHM_GOVERNANCE_MAIN.md`](docs/ALGORITHM_GOVERNANCE_MAIN.md).
 
 ```python
 from governed_stack import GovernedAlgorithm
@@ -321,7 +321,8 @@ governance-engine/
   haven2/src/haven2/      # energy + latch
   imprint/src/imprint/    # 3DM pipeline
   diagnostics/            # sketch
-  solvers/                # sketch (3sat, incomplete control)
+  solvers/                # sketch + CDCL SAT solver, separate from the governance product (see solvers/README.md)
+  examples/               # unified_works.py demo / cross-check (not a test, not the product)
   fluids/                 # sketch (TG / Dedalus smoke)
   haven/                  # sketch (HavenSovereign)
   scripts/unify_demo.py

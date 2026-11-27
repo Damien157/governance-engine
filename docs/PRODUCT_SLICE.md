@@ -1,7 +1,7 @@
 # Product slice — sealed ALLOW before side effects
 
-One-page buyer view of the live governance product. No P vs NP claims, no
-consciousness claims, no valuation hype, no quantum-computing marketing.
+One-page buyer view of the live governance product. No complexity-theory
+claims, no consciousness claims, no valuation hype, no quantum-computing marketing.
 
 ## What you get
 
@@ -73,11 +73,11 @@ Algorithm responses include ``decision`` / ``ok`` / ``reasons`` / ``entry_id`` p
   bursty callers. Full Soft “challenge” UX and Hard quarantine / write-freeze
   / recovery are charter hypotheses — see [ATOM_SAFEGUARD_II.md](ATOM_SAFEGUARD_II.md).
 - Vocabulary today: **ALLOW** proceed · **BLOCK** refuse · **REVIEW** human
-  escalate — not a Millennium proof and not a Soft/Hard lockdown product SKU.
+  escalate — not a Soft/Hard lockdown product SKU.
 
 ## Explicitly not this product
 
-- **Not** a Millennium Prize / P vs NP proof
+- **Not** a complexity-theory result
 - **Not** quantum computing hardware or a quantum supremacy claim
   (“QUANTUM” is Damien’s fused HAIS audit label)
 - **Not** a consciousness detector (spectrum = finite Dirichlet sums over

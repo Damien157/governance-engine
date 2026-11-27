@@ -1,5 +1,11 @@
 # Cost-to-recreate — live vs R&D (accounts justification)
 
+> **Planning estimates; hours never measured.** Every euro figure in this
+> document (including the €158,400 Book A and €315,350 Book B totals) is a
+> planning estimate: judged hours × a pinned tier rate. No hours were timed or
+> logged. Do not quote these figures as fact, and do not quote them anywhere
+> outside this document.
+
 **Not a valuation.** This document justifies a **blended labour cost-to-recreate**
 for statutory / planning use by mapping components to **live useful path**,
 **core-on-path**, or **R&D / sketch (aside)**.
